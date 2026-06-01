@@ -71,6 +71,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_common_arguments(generic_parser)
     generic_parser.add_argument(
+        "-c",
         "--preserve-contig",
         action="store_true",
         help="Preserve input ##contig header lines in the output VCF",
@@ -89,12 +90,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     """Add arguments shared by both modes."""
-    parser.add_argument("--vcf", required=True, help="Input VCF path")
-    parser.add_argument("--output", required=True, help="Output dbSNP VCF path")
-    parser.add_argument("--metadata", help="Optional metadata file path")
-    parser.add_argument("--error-report", help="Optional validation report path")
-    parser.add_argument("--reference", help="Optional reference FASTA for REF allele validation")
+    parser.add_argument("-v", "--vcf", required=True, help="Input VCF path")
+    parser.add_argument("-o", "--output", required=True, help="Output dbSNP VCF path")
+    parser.add_argument("-m", "--metadata", help="Optional metadata file path")
+    parser.add_argument("-e", "--error-report", help="Optional validation report path")
+    parser.add_argument("-r", "--reference", help="Optional reference FASTA for REF allele validation")
     parser.add_argument(
+        "-rr",
         "--reference-report",
         help="Optional reference validation report path when --reference is used",
     )

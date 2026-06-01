@@ -1,29 +1,93 @@
-# KVar SNP Public Validation Tools
+# KVar SNP : SNP VCF Validation & dbSNP VCF Creation
 
-This folder contains the public-facing subset for SNP VCF validation and dbSNP VCF creation.
+## Overview
+
+The **SNP** module of KVar validates SNP VCF input and produces cleaned,
+dbSNP-formatted VCF output for public archive submission. It can convert a
+generic VCF into a dbSNP-formatted VCF, validate and rewrite an existing dbSNP
+VCF, and optionally verify REF alleles against a reference FASTA.
+
 Run the commands below from this `SNP/` directory.
 
-## Included Workflows
+## Key Features
 
-1. Convert a generic VCF into a dbSNP-formatted VCF.
-2. Validate an input dbSNP VCF and rewrite it as a cleaned dbSNP VCF.
-3. Optionally validate REF alleles against a reference FASTA before writing output.
+- **Generic to dbSNP conversion**: Convert a generic VCF into a dbSNP-formatted VCF.
+- **dbSNP validation & cleaning**: Validate an input dbSNP VCF and rewrite it as a cleaned dbSNP VCF.
+- **Reference allele validation**: Optionally validate REF alleles against a reference FASTA before writing output.
+- **Metadata-driven headers**: Translate VCF-style metadata into output VCF headers.
 
-## Layout
+### Prerequisites
 
-```text
-src/kvar_snp_tools/
-  VCF2dbSNP.py
-  VCF_ref_check.py
-  dbSNP_parser.py
-  dbsnp_vcf_cleaner.py
-  error_handler.py
-  metadata_validator.py
-  norm_VCF.py
-  run_submission_validation.py
-examples/
-tests/
+**Runtime:**
+
+- Python 3.8 or higher
+
+**Python packages:**
+
+- `pyfaidx` (>= 0.8) — required only for reference FASTA validation
+
+**Optional external tools:**
+
+- `bcftools` — required only when using the normalization helper directly
+
+### Installation
+
+Install the Python dependencies:
+
+```bash
+pip install -r requirements.txt
 ```
+
+## Quick Start
+
+Convert a generic VCF into a dbSNP-formatted VCF:
+
+```bash
+python src/kvar_snp_tools/Sub_validator.py generic-to-dbsnp \
+  -v examples/toy.generic.vcf \
+  -m examples/toy.metadata.txt \
+  -o examples/toy.generic.cleaned.dbsnp.vcf \
+  -e examples/toy.generic.errors.txt
+```
+
+Validate and clean an existing dbSNP VCF:
+
+```bash
+python src/kvar_snp_tools/Sub_validator.py validate-dbsnp \
+  -v examples/toy.dbsnp.vcf \
+  -m examples/toy.metadata.txt \
+  -o examples/toy.dbsnp.cleaned.vcf \
+  -e examples/toy.dbsnp.errors.txt
+```
+
+Reference validation can be added to either command:
+
+```bash
+python src/kvar_snp_tools/Sub_validator.py validate-dbsnp \
+  -v examples/toy.dbsnp.vcf \
+  -r examples/toy.reference.fa \
+  -o examples/toy.dbsnp.cleaned.vcf
+```
+
+## Common Options
+
+The CLI exposes two commands: `generic-to-dbsnp` and `validate-dbsnp`. Both
+share the following options:
+
+| Option | Description |
+| --- | --- |
+| `-v`, `--vcf` | Input VCF path (**required**) |
+| `-o`, `--output` | Output dbSNP VCF path (**required**) |
+| `-m`, `--metadata` | Metadata file path |
+| `-e`, `--error-report` | Validation report path |
+| `-r`, `--reference` | Reference FASTA for REF allele validation |
+| `-rr`, `--reference-report` | Reference validation report path (used with `--reference`) |
+
+`generic-to-dbsnp` additionally accepts:
+
+| Option | Description |
+| --- | --- |
+| `-c`, `--preserve-contig` | Preserve input `##contig` header lines in the output VCF |
 
 ## Metadata Format
 
@@ -37,38 +101,32 @@ Metadata files use VCF-style lines:
 ##SampleSet_id=POP1
 ```
 
-`SampleSet_id` in the metadata file is written to output VCF headers as `##population_id=...`.
-The cleaned VCF output does not emit `##SampleSet_id=...`.
+`SampleSet_id` in the metadata file is written to output VCF headers as
+`##population_id=...`. The cleaned VCF output does not emit `##SampleSet_id=...`.
 
-## Commands
+## Project Structure
 
-Convert a generic VCF:
-
-```bash
-python src/kvar_snp_tools/run_submission_validation.py generic-to-dbsnp \
-  --vcf examples/toy.generic.vcf \
-  --metadata examples/toy.metadata.txt \
-  --output examples/toy.generic.cleaned.dbsnp.vcf \
-  --error-report examples/toy.generic.errors.txt
+```
+SNP/
+├── README.md            # This file
+├── requirements.txt
+├── src/kvar_snp_tools/
+│   ├── Sub_validator.py               # Public CLI entry point
+│   ├── VCF2dbSNP.py                    # Generic VCF -> dbSNP conversion
+│   ├── dbsnp_vcf_cleaner.py            # dbSNP VCF validation & cleaning
+│   ├── VCF_ref_check.py                # REF allele validation vs FASTA
+│   ├── dbSNP_parser.py
+│   ├── metadata_validator.py
+│   ├── norm_VCF.py
+│   └── error_handler.py
+├── examples/            # Toy inputs for trying the commands
+└── tests/               # CLI smoke tests
 ```
 
-Validate and clean a dbSNP VCF:
+## Testing
 
 ```bash
-python src/kvar_snp_tools/run_submission_validation.py validate-dbsnp \
-  --vcf examples/toy.dbsnp.vcf \
-  --metadata examples/toy.metadata.txt \
-  --output examples/toy.dbsnp.cleaned.vcf \
-  --error-report examples/toy.dbsnp.errors.txt
-```
-
-Reference validation can be added to either command:
-
-```bash
-python src/kvar_snp_tools/run_submission_validation.py validate-dbsnp \
-  --vcf examples/toy.dbsnp.vcf \
-  --reference examples/toy.reference.fa \
-  --output examples/toy.dbsnp.cleaned.vcf
+python -m pytest tests/
 ```
 
 ## Notes

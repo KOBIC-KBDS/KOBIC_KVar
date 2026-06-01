@@ -9,7 +9,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-CLI = ROOT / "src" / "kvar_snp_tools" / "run_submission_validation.py"
+CLI = ROOT / "src" / "kvar_snp_tools" / "Sub_validator.py"
 EXAMPLES = ROOT / "examples"
 
 
@@ -34,13 +34,13 @@ def test_generic_to_dbsnp_writes_population_id_only(tmp_dir):
             sys.executable,
             str(CLI),
             "generic-to-dbsnp",
-            "--vcf",
+            "-v",
             str(EXAMPLES / "toy.generic.vcf"),
-            "--metadata",
+            "-m",
             str(EXAMPLES / "toy.metadata.txt"),
-            "--output",
+            "-o",
             str(output_vcf),
-            "--error-report",
+            "-e",
             str(error_report),
         ]
     )
@@ -62,13 +62,13 @@ def test_validate_dbsnp_writes_cleaned_vcf(tmp_dir):
             sys.executable,
             str(CLI),
             "validate-dbsnp",
-            "--vcf",
+            "-v",
             str(EXAMPLES / "toy.dbsnp.vcf"),
-            "--metadata",
+            "-m",
             str(EXAMPLES / "toy.metadata.txt"),
-            "--output",
+            "-o",
             str(output_vcf),
-            "--error-report",
+            "-e",
             str(error_report),
         ]
     )
@@ -96,17 +96,17 @@ def test_validate_dbsnp_with_reference_check(tmp_dir):
             sys.executable,
             str(CLI),
             "validate-dbsnp",
-            "--vcf",
+            "-v",
             str(input_vcf),
-            "--metadata",
+            "-m",
             str(EXAMPLES / "toy.metadata.txt"),
-            "--reference",
+            "-r",
             str(reference_fasta),
-            "--reference-report",
+            "-rr",
             str(reference_report),
-            "--output",
+            "-o",
             str(output_vcf),
-            "--error-report",
+            "-e",
             str(error_report),
         ]
     )
