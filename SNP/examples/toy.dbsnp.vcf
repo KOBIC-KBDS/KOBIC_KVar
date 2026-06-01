@@ -1,0 +1,17 @@
+##fileformat=VCFv4.2
+##fileDate=20260601
+##handle=KVar
+##batch=EXP001
+##bioproject_id=PRJNA000001
+##biosample_id=SAMD000001
+##reference=toy_ref
+##INFO=<ID=VRT,Number=1,Type=Integer,Description="Variation type, 1 - SNV: single nucleotide variation, 2 - DIV: deletion/insertion variation, 3 - HETEROZYGOUS: variable, but undefined at nucleotide level, 4 - STR: short tandem repeat (microsatellite) variation, 5 - NAMED: insertion/deletion variation of named repetitive element, 6 - NO VARIATION: sequence scanned for variation, but none observed, 7 - MIXED: cluster contains submissions from 2 or more allelic classes, 8 - MNV: multiple nucleotide variation with alleles of common length greater than 1">
+##INFO=<ID=AC,Number=A,Type=Integer,Description="Allele count">
+##INFO=<ID=AN,Number=1,Type=Integer,Description="Allele number">
+##INFO=<ID=AF,Number=A,Type=Float,Description="Allele frequency">
+##FORMAT=<ID=NA,Number=1,Type=Integer,Description="Number of alleles for the population">
+##FORMAT=<ID=FRQ,Number=.,Type=Float,Description="Frequency of each alternate allele">
+##population_id=POP1
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	POP1
+chr1	2	var1	C	T	.	PASS	VRT=1;AC=2;AN=10;AF=0.2	NA:FRQ	10:0.2
+

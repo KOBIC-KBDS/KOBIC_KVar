@@ -1,0 +1,6 @@
+##Experiment_id=EXP001
+##bioproject_id=PRJNA000001
+##biosample_id=SAMD000001
+##reference=toy_ref
+##SampleSet_id=POP1
+

@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.errors.txt
+*.ref_check_report.txt
+*.fai
+SNP/examples/*.cleaned*.vcf
+SNP/examples/*.cleaned*.vcf.gz

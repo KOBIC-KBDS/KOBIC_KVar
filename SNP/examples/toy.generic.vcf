@@ -1,0 +1,6 @@
+##fileformat=VCFv4.2
+##INFO=<ID=AC,Number=A,Type=Integer,Description="Allele count">
+##INFO=<ID=AN,Number=1,Type=Integer,Description="Allele number">
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO
+chr1	2	var1	C	T	.	PASS	AC=2;AN=10
+
