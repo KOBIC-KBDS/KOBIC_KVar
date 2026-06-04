@@ -432,7 +432,7 @@ def main():
         epilog="""
 Examples:
   python VCF_ref_check.py -v input.vcf -f reference.fasta -o report.txt
-  python VCF_ref_check.py --vcf input.vcf.gz --fasta reference.fasta --output report.txt
+  python VCF_ref_check.py -v input.vcf.gz -f reference.fasta -o report.txt
 
 Notes:
   - pyfaidx library is required: pip install pyfaidx

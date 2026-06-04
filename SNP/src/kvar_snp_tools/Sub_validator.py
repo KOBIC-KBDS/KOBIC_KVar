@@ -37,7 +37,7 @@ def _run_reference_check(vcf_path: str, reference_path: Optional[str], report_pa
 def convert_generic_to_dbsnp(args: argparse.Namespace) -> None:
     """Convert a generic VCF into a dbSNP-formatted VCF."""
     _run_reference_check(args.vcf, args.reference, args.reference_report)
-    converter = VCF2dbSNPConverter(preserve_contig=args.preserve_contig)
+    converter = VCF2dbSNPConverter()
     converter.convert_vcf_to_dbsnp(
         vcf_file_path=args.vcf,
         output_file_path=args.output,
@@ -70,12 +70,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Convert a generic VCF into a dbSNP-formatted VCF",
     )
     _add_common_arguments(generic_parser)
-    generic_parser.add_argument(
-        "-c",
-        "--preserve-contig",
-        action="store_true",
-        help="Preserve input ##contig header lines in the output VCF",
-    )
     generic_parser.set_defaults(func=convert_generic_to_dbsnp)
 
     strict_parser = subparsers.add_parser(

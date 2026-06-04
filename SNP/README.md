@@ -1,8 +1,8 @@
-# KVar SNP : SNP VCF Validation & dbSNP VCF Creation
+# KVar-Toolkit SNP: SNP VCF Validation & dbSNP VCF Creation
 
 ## Overview
 
-The **SNP** module of KVar validates SNP VCF input and produces cleaned,
+The **SNP** module of KVar-Toolkit validates SNP VCF input and produces cleaned,
 dbSNP-formatted VCF output for public archive submission. It can convert a
 generic VCF into a dbSNP-formatted VCF, validate and rewrite an existing dbSNP
 VCF, and optionally verify REF alleles against a reference FASTA.
@@ -83,12 +83,6 @@ share the following options:
 | `-r`, `--reference` | Reference FASTA for REF allele validation |
 | `-rr`, `--reference-report` | Reference validation report path (used with `--reference`) |
 
-`generic-to-dbsnp` additionally accepts:
-
-| Option | Description |
-| --- | --- |
-| `-c`, `--preserve-contig` | Preserve input `##contig` header lines in the output VCF |
-
 ## Metadata Format
 
 Metadata files use VCF-style lines:
@@ -126,7 +120,7 @@ SNP/
 ## Testing
 
 ```bash
-python -m pytest tests/
+python tests/test_public_cli_smoke.py
 ```
 
 ## Notes

@@ -42,6 +42,7 @@ class DbSNPVCFCleaner:
         self.error_handler = error_handler or ErrorHandler()
         self.parser = dbSNPVCFParser(self.error_handler)
         self.metadata_info: Optional[MetadataInfo] = None
+        self.contig_lines: List[str] = []
 
     def clean(
         self,
@@ -56,6 +57,7 @@ class DbSNPVCFCleaner:
             self.metadata_info = metadata_validator.parse_metadata_file(metadata_file_path)
 
         self.parser.parse_file(vcf_file_path)
+        self.contig_lines = self._read_contig_lines(vcf_file_path)
 
         if self.metadata_info:
             metadata_validator = MetadataValidator(self.error_handler)
@@ -92,6 +94,20 @@ class DbSNPVCFCleaner:
             if output_file_path.endswith(suffix):
                 return output_file_path[: -len(suffix)] + ".errors.txt"
         return output_file_path + ".errors.txt"
+
+    @staticmethod
+    def _read_contig_lines(vcf_file_path: str) -> List[str]:
+        """Return input contig header lines in their original order."""
+        opener = gzip.open if vcf_file_path.endswith(".gz") else open
+        contig_lines: List[str] = []
+        with opener(vcf_file_path, "rt", encoding="utf-8") as handle:
+            for line in handle:
+                line = line.rstrip("\n")
+                if line.startswith("#CHROM"):
+                    break
+                if line.startswith("##contig="):
+                    contig_lines.append(line)
+        return contig_lines
 
     def _vcf_metadata_dict(self) -> Dict[str, Any]:
         """Return parsed VCF metadata as a dictionary."""
@@ -196,6 +212,8 @@ class DbSNPVCFCleaner:
             handle.write(f"##biosample_id={metadata.biosample_id}\n")
         if metadata.reference:
             handle.write(f"##reference={metadata.reference}\n")
+        for contig_line in self.contig_lines:
+            handle.write(contig_line + "\n")
 
     def _write_info_tags(self, handle) -> None:
         """Write INFO tag definitions."""

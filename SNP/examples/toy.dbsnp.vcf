@@ -5,6 +5,7 @@
 ##bioproject_id=PRJNA000001
 ##biosample_id=SAMD000001
 ##reference=toy_ref
+##contig=<ID=chr1,length=20>
 ##INFO=<ID=VRT,Number=1,Type=Integer,Description="Variation type, 1 - SNV: single nucleotide variation, 2 - DIV: deletion/insertion variation, 3 - HETEROZYGOUS: variable, but undefined at nucleotide level, 4 - STR: short tandem repeat (microsatellite) variation, 5 - NAMED: insertion/deletion variation of named repetitive element, 6 - NO VARIATION: sequence scanned for variation, but none observed, 7 - MIXED: cluster contains submissions from 2 or more allelic classes, 8 - MNV: multiple nucleotide variation with alleles of common length greater than 1">
 ##INFO=<ID=AC,Number=A,Type=Integer,Description="Allele count">
 ##INFO=<ID=AN,Number=1,Type=Integer,Description="Allele number">
@@ -14,4 +15,3 @@
 ##population_id=POP1
 #CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	POP1
 chr1	2	var1	C	T	.	PASS	VRT=1;AC=2;AN=10;AF=0.2	NA:FRQ	10:0.2
-

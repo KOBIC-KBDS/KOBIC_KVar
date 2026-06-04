@@ -1,11 +1,11 @@
-# KVar : Variant QC & Validation Toolkit
+# KVar-Toolkit: Variant QC & Validation Toolkit
 
 ## Overview
 
-**KVar** is a toolkit for quality control (QC) and submission validation of
-genetic variant data managed by KOBIC. It standardizes variant files into the
-formats required for public archive submission and verifies that the records are
-internally consistent and consistent with a reference genome.
+**KVar-Toolkit** is a toolkit for quality control (QC) and submission validation
+of genetic variant data managed by KOBIC. It standardizes variant files into
+the formats required for public archive submission and verifies that the records
+are internally consistent and consistent with a reference genome.
 
 The toolkit is organized by variant type. Each module is self-contained and can
 be used independently from its own subdirectory. The current release provides
@@ -48,8 +48,8 @@ the **SNP** module; additional modules can be added under the same structure.
 1. Clone the repository
 
 ```bash
-git clone https://github.com/KOBIC-KBDS/KOBIC_KVar.git
-cd KOBIC_KVar
+git clone https://github.com/KOBIC-KBDS/KVar-Toolkit.git
+cd KVar-Toolkit
 ```
 
 2. Install Python dependencies for the module you want to use
@@ -78,7 +78,7 @@ format, and reference-validation options.
 ## Project Structure
 
 ```
-KOBIC_KVar/
+KVar-Toolkit/
 ├── README.md            # This file
 ├── LICENSE
 ├── .gitignore
@@ -108,12 +108,12 @@ Each module ships with its own tests. For the SNP module:
 
 ```bash
 cd SNP
-python -m pytest tests/
+python tests/test_public_cli_smoke.py
 ```
 
 ## Support
 
-- **Issues**: [GitHub Issues](https://github.com/KOBIC-KBDS/KOBIC_KVar/issues)
+- **Issues**: [GitHub Issues](https://github.com/KOBIC-KBDS/KVar-Toolkit/issues)
 
 ## Acknowledgments
 

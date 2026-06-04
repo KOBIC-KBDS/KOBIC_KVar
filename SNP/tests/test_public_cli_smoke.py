@@ -47,6 +47,7 @@ def test_generic_to_dbsnp_writes_population_id_only(tmp_dir):
 
     output_text = output_vcf.read_text(encoding="utf-8")
     assert "##population_id=POP1" in output_text
+    assert "##contig=<ID=chr1,length=20>" in output_text
     assert "##SampleSet_id=" not in output_text
     assert "VRT=1" in output_text
     assert "AF=0.2" in output_text
@@ -75,6 +76,7 @@ def test_validate_dbsnp_writes_cleaned_vcf(tmp_dir):
 
     output_text = output_vcf.read_text(encoding="utf-8")
     assert "##population_id=POP1" in output_text
+    assert "##contig=<ID=chr1,length=20>" in output_text
     assert "##SampleSet_id=" not in output_text
     assert output_text.count("##INFO=<ID=VRT") == 1
     assert "\tNA:FRQ\t10:0.2" in output_text

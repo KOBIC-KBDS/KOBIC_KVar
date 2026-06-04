@@ -55,12 +55,11 @@ else:
 class VCF2dbSNPConverter:
     """Convert generic VCF files to dbSNP VCF format."""
     
-    def __init__(self, error_handler: Optional[ErrorHandler] = None, preserve_contig: bool = False):
+    def __init__(self, error_handler: Optional[ErrorHandler] = None):
         self.error_handler = error_handler or ErrorHandler()
         self.parser = dbSNPVCFParser(self.error_handler)
         self.metadata_info: Optional[MetadataInfo] = None
-        self.preserve_contig = preserve_contig
-        self.contig_lines: List[str] = []  # ##contig=... lines (used only when preserve_contig is True)
+        self.contig_lines: List[str] = []
     
     def convert_vcf_to_dbsnp(
         self,
@@ -238,8 +237,7 @@ class VCF2dbSNPConverter:
                 self.parser.header.metadata.reference = value
             elif key == 'population_id':
                 self.parser.header.population_ids.append(value)
-            elif key == 'contig' and self.preserve_contig:
-                # Preserve ##contig=... lines when --preserve-contig is set
+            elif key == 'contig':
                 self.contig_lines.append(line)
             elif key == 'info':
                 self._parse_info_tag_definition(line, line_number)
@@ -980,10 +978,8 @@ class VCF2dbSNPConverter:
         if reference:
             f.write(f"##reference={reference}\n")
         
-        # ##contig=... lines (only when --preserve-contig was set)
-        if self.preserve_contig and self.contig_lines:
-            for contig_line in self.contig_lines:
-                f.write(contig_line + '\n')
+        for contig_line in self.contig_lines:
+            f.write(contig_line + '\n')
     
     def _write_info_tag_definitions(self, f) -> None:
         """Write INFO tag definitions."""
@@ -1166,9 +1162,8 @@ def main():
         epilog="""
 Examples:
   python VCF2dbSNP.py -v input.vcf -o output.vcf -m metadata.txt
-  python VCF2dbSNP.py --vcf input.vcf.gz --output output.vcf.gz --metadata metadata.txt
-  python VCF2dbSNP.py --vcf input.vcf.gz --output output.dbsnp.vcf.gz
-  python VCF2dbSNP.py -v input.vcf -o output.vcf -c   # preserve ##contig header lines
+  python VCF2dbSNP.py -v input.vcf.gz -o output.vcf.gz -m metadata.txt
+  python VCF2dbSNP.py -v input.vcf.gz -o output.dbsnp.vcf.gz
         """
     )
     
@@ -1200,13 +1195,6 @@ Examples:
         help='Error report file path (optional)'
     )
     
-    parser.add_argument(
-        '-c', '--preserve-contig',
-        dest='preserve_contig',
-        action='store_true',
-        help='Preserve ##contig header lines from input VCF in output'
-    )
-    
     args = parser.parse_args()
     
     # Check file existence
@@ -1219,7 +1207,7 @@ Examples:
         sys.exit(1)
     
     # Run conversion
-    converter = VCF2dbSNPConverter(preserve_contig=args.preserve_contig)
+    converter = VCF2dbSNPConverter()
     
     try:
         converter.convert_vcf_to_dbsnp(
