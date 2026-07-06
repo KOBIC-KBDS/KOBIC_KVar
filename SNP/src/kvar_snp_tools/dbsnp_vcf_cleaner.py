@@ -11,12 +11,26 @@ from typing import Any, Dict, Iterable, List, Optional
 
 if __package__ in (None, ""):
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from kvar_snp_tools.VCF2dbSNP import get_vcf_info_output_id
+    from kvar_snp_tools.VCF2dbSNP import (
+        DBSNP_OUTPUT_INFO_IDS,
+        DBSNP_OUTPUT_INFO_EXPECTED_VALUE,
+        DBSNP_OUTPUT_INFO_ORDER,
+        DBSNP_OUTPUT_INFO_TAG_DEFINITIONS,
+        get_vcf_info_output_id,
+        is_dbsnp_output_info_id,
+    )
     from kvar_snp_tools.dbSNP_parser import FormatTagDefinition, InfoTagDefinition, VCFDataRow, dbSNPVCFParser
     from kvar_snp_tools.error_handler import ErrorCode, ErrorHandler
     from kvar_snp_tools.metadata_validator import MetadataInfo, MetadataValidator
 else:
-    from .VCF2dbSNP import get_vcf_info_output_id
+    from .VCF2dbSNP import (
+        DBSNP_OUTPUT_INFO_IDS,
+        DBSNP_OUTPUT_INFO_EXPECTED_VALUE,
+        DBSNP_OUTPUT_INFO_ORDER,
+        DBSNP_OUTPUT_INFO_TAG_DEFINITIONS,
+        get_vcf_info_output_id,
+        is_dbsnp_output_info_id,
+    )
     from .dbSNP_parser import FormatTagDefinition, InfoTagDefinition, VCFDataRow, dbSNPVCFParser
     from .error_handler import ErrorCode, ErrorHandler
     from .metadata_validator import MetadataInfo, MetadataValidator
@@ -43,6 +57,7 @@ class DbSNPVCFCleaner:
         self.parser = dbSNPVCFParser(self.error_handler)
         self.metadata_info: Optional[MetadataInfo] = None
         self.contig_lines: List[str] = []
+        self._warned_unsupported_output_info_tags = set()
 
     def clean(
         self,
@@ -58,6 +73,7 @@ class DbSNPVCFCleaner:
 
         self.parser.parse_file(vcf_file_path)
         self.contig_lines = self._read_contig_lines(vcf_file_path)
+        self._record_unsupported_info_tags()
 
         if self.metadata_info:
             metadata_validator = MetadataValidator(self.error_handler)
@@ -219,12 +235,65 @@ class DbSNPVCFCleaner:
         """Write INFO tag definitions."""
         handle.write(CANONICAL_VRT_HEADER + "\n")
         written_ids = {"VRT"}
+        used_ids = self._used_output_info_ids()
         for tag_def in self.parser.header.info_tags.values():
             output_id = get_vcf_info_output_id(tag_def.id)
+            if output_id not in used_ids or output_id not in DBSNP_OUTPUT_INFO_IDS:
+                continue
             if output_id in written_ids:
                 continue
             written_ids.add(output_id)
             handle.write(self._format_info_definition(output_id, tag_def) + "\n")
+
+        for output_id in DBSNP_OUTPUT_INFO_ORDER:
+            if output_id in written_ids or output_id not in used_ids:
+                continue
+            if output_id not in DBSNP_OUTPUT_INFO_TAG_DEFINITIONS:
+                continue
+            number, type_str, description = DBSNP_OUTPUT_INFO_TAG_DEFINITIONS[output_id]
+            written_ids.add(output_id)
+            handle.write(
+                f'##INFO=<ID={output_id},Number={number},'
+                f'Type={type_str},Description="{description}">\n'
+            )
+
+    def _used_output_info_ids(self) -> set:
+        """Return retained INFO IDs that are present in parsed rows."""
+        used_ids = set()
+        for row in self.parser.data_rows:
+            for tag_id in row.info:
+                output_id = get_vcf_info_output_id(tag_id)
+                if output_id in DBSNP_OUTPUT_INFO_IDS:
+                    used_ids.add(output_id)
+        return used_ids
+
+    def _record_unsupported_info_tags(self) -> None:
+        """Record unsupported INFO tags that will be excluded from output."""
+        for tag_id in self.parser.header.info_tags:
+            if not is_dbsnp_output_info_id(tag_id):
+                self._warn_unsupported_output_info_tag(tag_id, context="INFO header")
+        for row in self.parser.data_rows:
+            for tag_id in row.info:
+                if not is_dbsnp_output_info_id(tag_id):
+                    self._warn_unsupported_output_info_tag(tag_id, context="INFO field")
+
+    def _warn_unsupported_output_info_tag(self, tag_id: str, context: str) -> None:
+        """Record one warning for an INFO tag excluded from dbSNP VCF output."""
+        output_id = get_vcf_info_output_id(tag_id)
+        warning_key = f"{tag_id}->{output_id}"
+        if warning_key in self._warned_unsupported_output_info_tags:
+            return
+        self._warned_unsupported_output_info_tags.add(warning_key)
+        self.error_handler.create_error(
+            ErrorCode.UNSUPPORTED_DBSNP_INFO_TAG,
+            field_name=tag_id,
+            expected_value=DBSNP_OUTPUT_INFO_EXPECTED_VALUE,
+            actual_value=output_id,
+            additional_info={
+                "action": "Excluded from dbSNP VCF output",
+                "context": context,
+            },
+        )
 
     @staticmethod
     def _format_info_definition(output_id: str, tag_def: InfoTagDefinition) -> str:
@@ -305,6 +374,8 @@ class DbSNPVCFCleaner:
         parts: List[str] = []
         for key, value in info.items():
             output_key = get_vcf_info_output_id(key)
+            if output_key not in DBSNP_OUTPUT_INFO_IDS:
+                continue
             if isinstance(value, bool) and value:
                 parts.append(output_key)
             else:

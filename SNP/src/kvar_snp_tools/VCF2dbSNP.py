@@ -22,12 +22,37 @@ VCF_INFO_ID_RENAMES = {
     '1kGP_EUR_AF': 'GP1K_EUR_AF',
     '1kGP_SAS_AF': 'GP1K_SAS_AF',
     '61KJPN': 'JPN61K',
+    '61KJPN_AC': 'JPN61K_AC',
     '61KJPN_AF': 'JPN61K_AF',
     '61KJPN_AN': 'JPN61K_AN',
     '61KJPN_nhomalt': 'JPN61K_nhomalt',
 }
 
 VCF_INFO_ID_PATTERN = re.compile(r'^[A-Za-z_][0-9A-Za-z_.]*$')
+
+DBSNP_OUTPUT_INFO_ORDER = [
+    'VRT', 'AF', 'AN', 'AC', 'AD', 'AA', 'CMT', 'LKO', 'NIO',
+    'OMIM', 'OMIA', 'PMID', 'SAO', 'SSR',
+]
+
+DBSNP_OUTPUT_INFO_IDS = set(DBSNP_OUTPUT_INFO_ORDER)
+DBSNP_OUTPUT_INFO_EXPECTED_VALUE = ', '.join(DBSNP_OUTPUT_INFO_ORDER)
+
+DBSNP_OUTPUT_INFO_TAG_DEFINITIONS = {
+    'AF': ('A', 'Float', 'Allele frequency for each alternate allele'),
+    'AN': ('1', 'Integer', 'Total number of alleles'),
+    'AC': ('A', 'Integer', 'Allele count for each alternate allele'),
+    'AD': ('1', 'String', 'Alternate designations'),
+    'AA': ('1', 'String', 'Ancestral allele'),
+    'CMT': ('1', 'String', 'Comment'),
+    'LKO': ('1', 'String', 'LinkOut URL'),
+    'NIO': ('1', 'Integer', 'Number of individuals with observed data'),
+    'OMIM': ('1', 'String', 'OMIM record and variant ID'),
+    'OMIA': ('1', 'String', 'OMIA record and variant ID'),
+    'PMID': ('.', 'Integer', 'PubMed ID linked to variant'),
+    'SAO': ('.', 'Integer', 'Variant allele origin'),
+    'SSR': ('.', 'Integer', 'Variant suspect reason'),
+}
 
 
 def get_vcf_info_output_id(info_id: str) -> str:
@@ -40,6 +65,11 @@ def get_vcf_info_output_id(info_id: str) -> str:
     if not cleaned or not re.match(r'^[A-Za-z_]', cleaned):
         cleaned = f'X_{cleaned}'
     return cleaned
+
+
+def is_dbsnp_output_info_id(info_id: str) -> bool:
+    """Return whether an INFO ID is retained in dbSNP VCF output."""
+    return get_vcf_info_output_id(info_id) in DBSNP_OUTPUT_INFO_IDS
 
 # Support relative imports.
 if __name__ == "__main__":
@@ -60,6 +90,7 @@ class VCF2dbSNPConverter:
         self.parser = dbSNPVCFParser(self.error_handler)
         self.metadata_info: Optional[MetadataInfo] = None
         self.contig_lines: List[str] = []
+        self._warned_unsupported_output_info_tags = set()
     
     def convert_vcf_to_dbsnp(
         self,
@@ -259,6 +290,13 @@ class VCF2dbSNPConverter:
                 type=type_str,
                 description=description
             )
+            if not is_dbsnp_output_info_id(tag_id):
+                self._warn_unsupported_output_info_tag(
+                    tag_id,
+                    line_number=line_number,
+                    line_content=line,
+                    context="INFO header"
+                )
     
     def _parse_format_tag_definition(self, line: str, line_number: int) -> None:
         """Parse a FORMAT tag definition."""
@@ -500,12 +538,52 @@ class VCF2dbSNPConverter:
                 key, value = pair.split('=', 1)
                 self.parser._warn_if_undefined_info_tag(key, line_number, line)
                 self.parser._validate_target_info_value(key, value, line_number)
+                if not is_dbsnp_output_info_id(key):
+                    self._warn_unsupported_output_info_tag(
+                        key,
+                        line_number=line_number,
+                        line_content=line,
+                        context="INFO field"
+                    )
                 info_dict[key] = self._convert_info_value(key, value, line_number)
             else:
                 self.parser._warn_if_undefined_info_tag(pair, line_number, line)
+                if not is_dbsnp_output_info_id(pair):
+                    self._warn_unsupported_output_info_tag(
+                        pair,
+                        line_number=line_number,
+                        line_content=line,
+                        context="INFO field"
+                    )
                 info_dict[pair] = True
         
         return info_dict
+
+    def _warn_unsupported_output_info_tag(
+        self,
+        tag_id: str,
+        line_number: Optional[int] = None,
+        line_content: Optional[str] = None,
+        context: str = "INFO field",
+    ) -> None:
+        """Record that an input INFO tag will be excluded from dbSNP VCF output."""
+        output_id = get_vcf_info_output_id(tag_id)
+        warning_key = f"{tag_id}->{output_id}"
+        if warning_key in self._warned_unsupported_output_info_tags:
+            return
+        self._warned_unsupported_output_info_tags.add(warning_key)
+        self.error_handler.create_error(
+            ErrorCode.UNSUPPORTED_DBSNP_INFO_TAG,
+            line_number=line_number,
+            line_content=line_content,
+            field_name=tag_id,
+            expected_value=DBSNP_OUTPUT_INFO_EXPECTED_VALUE,
+            actual_value=output_id,
+            additional_info={
+                "action": "Excluded from dbSNP VCF output",
+                "context": context,
+            }
+        )
     
     def _convert_info_value(self, key: str, value: str, line_number: int) -> Any:
         """Convert INFO values for known numeric tags."""
@@ -986,12 +1064,34 @@ class VCF2dbSNPConverter:
         f.write('##INFO=<ID=VRT,Number=1,Type=Integer,Description="Variation type, 1 - SNV: single nucleotide variation, 2 - DIV: deletion/insertion variation, 3 - HETEROZYGOUS: variable, but undefined at nucleotide level, 4 - STR: short tandem repeat (microsatellite) variation, 5 - NAMED: insertion/deletion variation of named repetitive element, 6 - NO VARIATION: sequence scanned for variation, but none observed, 7 - MIXED: cluster contains submissions from 2 or more allelic classes, 8 - MNV: multiple nucleotide variation with alleles of common length greater than 1">\n')
         
         written_info_ids = {'VRT'}
+        used_info_ids = self._used_output_info_ids()
         for tag_id, tag_def in self.parser.header.info_tags.items():
             output_info_id = get_vcf_info_output_id(tag_def.id)
+            if output_info_id not in used_info_ids or output_info_id not in DBSNP_OUTPUT_INFO_IDS:
+                continue
             if output_info_id in written_info_ids:
                 continue
             written_info_ids.add(output_info_id)
             f.write(f'##INFO=<ID={output_info_id},Number={tag_def.number},Type={tag_def.type},Description="{tag_def.description}">\n')
+
+        for output_info_id in DBSNP_OUTPUT_INFO_ORDER:
+            if output_info_id in written_info_ids or output_info_id not in used_info_ids:
+                continue
+            if output_info_id not in DBSNP_OUTPUT_INFO_TAG_DEFINITIONS:
+                continue
+            number, type_str, description = DBSNP_OUTPUT_INFO_TAG_DEFINITIONS[output_info_id]
+            written_info_ids.add(output_info_id)
+            f.write(f'##INFO=<ID={output_info_id},Number={number},Type={type_str},Description="{description}">\n')
+
+    def _used_output_info_ids(self) -> set:
+        """Return retained INFO IDs that are present in parsed rows."""
+        used_info_ids = set()
+        for row in self.parser.data_rows:
+            for tag_id in row.info:
+                output_info_id = get_vcf_info_output_id(tag_id)
+                if output_info_id in DBSNP_OUTPUT_INFO_IDS:
+                    used_info_ids.add(output_info_id)
+        return used_info_ids
     
     def _write_format_tag_definitions(self, f) -> None:
         """Write FORMAT tag definitions."""
@@ -1058,6 +1158,8 @@ class VCF2dbSNPConverter:
         info_parts = []
         for key, value in row.info.items():
             output_key = get_vcf_info_output_id(key)
+            if output_key not in DBSNP_OUTPUT_INFO_IDS:
+                continue
             if isinstance(value, bool) and value:
                 info_parts.append(output_key)
             else:

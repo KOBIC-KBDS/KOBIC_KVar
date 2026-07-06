@@ -26,10 +26,6 @@ Run the commands below from this `SNP/` directory.
 
 - `pyfaidx` (>= 0.8) — required only for reference FASTA validation
 
-**Optional external tools:**
-
-- `bcftools` — required only when using the normalization helper directly
-
 ### Installation
 
 Install the Python dependencies:
@@ -105,14 +101,7 @@ SNP/
 ├── README.md            # This file
 ├── requirements.txt
 ├── src/kvar_snp_tools/
-│   ├── Sub_validator.py               # Public CLI entry point
-│   ├── VCF2dbSNP.py                    # Generic VCF -> dbSNP conversion
-│   ├── dbsnp_vcf_cleaner.py            # dbSNP VCF validation & cleaning
-│   ├── VCF_ref_check.py                # REF allele validation vs FASTA
-│   ├── dbSNP_parser.py
-│   ├── metadata_validator.py
-│   ├── norm_VCF.py
-│   └── error_handler.py
+│   └── Sub_validator.py               # Public CLI entry point
 ├── examples/            # Toy inputs for trying the commands
 └── tests/               # CLI smoke tests
 ```
@@ -125,6 +114,5 @@ python tests/test_public_cli_smoke.py
 
 ## Notes
 
-- `bcftools` is required only when using the normalization helper directly.
 - `pyfaidx` is required only for reference FASTA validation.
 - This public subset does not include private datasets, generated full-scale outputs, or internal pipeline reports.

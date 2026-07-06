@@ -39,10 +39,6 @@ the **SNP** module; additional modules can be added under the same structure.
 
 - `pyfaidx` (>= 0.8) — required only for reference FASTA validation
 
-**Optional external tools:**
-
-- `bcftools` — required only when using the normalization helper directly
-
 ### Installation
 
 1. Clone the repository
@@ -86,14 +82,7 @@ KVar-Toolkit/
     ├── README.md        # SNP module documentation
     ├── requirements.txt
     ├── src/kvar_snp_tools/
-    │   ├── Sub_validator.py               # Public CLI entry point
-    │   ├── VCF2dbSNP.py                    # Generic VCF -> dbSNP conversion
-    │   ├── dbsnp_vcf_cleaner.py            # dbSNP VCF validation & cleaning
-    │   ├── VCF_ref_check.py                # REF allele validation vs FASTA
-    │   ├── dbSNP_parser.py
-    │   ├── metadata_validator.py
-    │   ├── norm_VCF.py
-    │   └── error_handler.py
+    │   └── Sub_validator.py               # Public CLI entry point
     ├── examples/        # Toy inputs for trying the commands
     └── tests/           # CLI smoke tests
 ```

@@ -70,6 +70,7 @@ class ErrorCode(Enum):
     INVALID_VRT_HEADER_DEFINITION = (2206, ErrorSeverity.ERROR, ErrorCategory.HEADER_ERROR, "VRT INFO header definition is invalid")
     UNDEFINED_INFO_TAG = (2207, ErrorSeverity.WARNING, ErrorCategory.HEADER_ERROR, "INFO tag is not defined in the VCF header")
     INVALID_INFO_TAG_TYPE = (2208, ErrorSeverity.ERROR, ErrorCategory.VALIDATION_ERROR, "INFO tag value type is invalid")
+    UNSUPPORTED_DBSNP_INFO_TAG = (2209, ErrorSeverity.WARNING, ErrorCategory.HEADER_ERROR, "INFO tag is not supported in dbSNP VCF output")
     
     # FORMAT tag-related errors (2300s)
     FORMAT_TAG_PARSE_ERROR = (2301, ErrorSeverity.ERROR, ErrorCategory.HEADER_ERROR, "FORMAT tag definition parse error")

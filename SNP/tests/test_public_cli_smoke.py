@@ -56,15 +56,28 @@ def test_generic_to_dbsnp_writes_population_id_only(tmp_dir):
 
 def test_validate_dbsnp_writes_cleaned_vcf(tmp_dir):
     """dbSNP VCF validation rewrites a cleaned dbSNP VCF."""
+    input_vcf = tmp_dir / "toy.annotated.dbsnp.vcf"
     output_vcf = tmp_dir / "dbsnp.cleaned.vcf"
     error_report = tmp_dir / "dbsnp.errors.txt"
+    input_text = (EXAMPLES / "toy.dbsnp.vcf").read_text(encoding="utf-8")
+    input_text = input_text.replace(
+        "##FORMAT=<ID=NA",
+        "##INFO=<ID=CSQ,Number=.,Type=String,Description=\"Consequence annotations. Format: Allele|Consequence\">\n"
+        "##INFO=<ID=61KJPN_AC,Number=A,Type=Integer,Description=\"61KJPN allele count\">\n"
+        "##FORMAT=<ID=NA",
+    )
+    input_text = input_text.replace(
+        "VRT=1;AC=2;AN=10;AF=0.2",
+        "VRT=1;AC=2;AN=10;AF=0.2;CSQ=T|missense_variant;61KJPN_AC=7",
+    )
+    input_vcf.write_text(input_text, encoding="utf-8")
     run_command(
         [
             sys.executable,
             str(CLI),
             "validate-dbsnp",
             "-v",
-            str(EXAMPLES / "toy.dbsnp.vcf"),
+            str(input_vcf),
             "-m",
             str(EXAMPLES / "toy.metadata.txt"),
             "-o",
@@ -80,6 +93,10 @@ def test_validate_dbsnp_writes_cleaned_vcf(tmp_dir):
     assert "##SampleSet_id=" not in output_text
     assert output_text.count("##INFO=<ID=VRT") == 1
     assert "\tNA:FRQ\t10:0.2" in output_text
+    assert "CSQ" not in output_text
+    assert "61KJPN_AC" not in output_text
+    assert "JPN61K_AC" not in output_text
+    assert "UNSUPPORTED_DBSNP_INFO_TAG" in error_report.read_text(encoding="utf-8")
     assert error_report.exists()
 
 
