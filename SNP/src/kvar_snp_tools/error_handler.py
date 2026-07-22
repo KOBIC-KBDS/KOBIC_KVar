@@ -39,18 +39,16 @@ class ErrorCode(Enum):
     FILE_READ_ERROR = (1002, ErrorSeverity.CRITICAL, ErrorCategory.FILE_ERROR, "File read error")
     FILE_WRITE_ERROR = (1003, ErrorSeverity.CRITICAL, ErrorCategory.FILE_ERROR, "File write error")
     FILE_ENCODING_ERROR = (1004, ErrorSeverity.CRITICAL, ErrorCategory.FILE_ERROR, "File encoding error")
-    
+
     # Header-related errors (2000s)
     MISSING_FILEFORMAT = (2001, ErrorSeverity.ERROR, ErrorCategory.HEADER_ERROR, "##fileformat metadata is missing")
     INVALID_FILEFORMAT = (2002, ErrorSeverity.ERROR, ErrorCategory.HEADER_ERROR, "Not a VCF format (must start with VCFv)")
     MISSING_COLUMN_HEADER = (2003, ErrorSeverity.CRITICAL, ErrorCategory.HEADER_ERROR, "Column header is missing")
     INVALID_COLUMN_HEADER = (2004, ErrorSeverity.ERROR, ErrorCategory.HEADER_ERROR, "Column header format is invalid")
     DUPLICATE_COLUMN_HEADER = (2005, ErrorSeverity.ERROR, ErrorCategory.HEADER_ERROR, "Column header is duplicated")
-    
+
     # Metadata-related errors (2100s)
-    MISSING_REQUIRED_METADATA = (2101, ErrorSeverity.ERROR, ErrorCategory.METADATA_ERROR, "Required metadata is missing")
     INVALID_METADATA_FORMAT = (2102, ErrorSeverity.ERROR, ErrorCategory.METADATA_ERROR, "Metadata format is invalid")
-    METADATA_MISMATCH = (2103, ErrorSeverity.ERROR, ErrorCategory.METADATA_ERROR, "Metadata file and VCF file metadata do not match")
     METADATA_VALUE_FILLED = (2104, ErrorSeverity.WARNING, ErrorCategory.METADATA_ERROR, "VCF metadata value was filled from metadata file")
     METADATA_VALUE_CORRECTED = (2105, ErrorSeverity.WARNING, ErrorCategory.METADATA_ERROR, "VCF metadata value was replaced with metadata file value")
     DUPLICATE_METADATA_TAG = (2106, ErrorSeverity.ERROR, ErrorCategory.HEADER_ERROR, "Metadata tag is duplicated")
@@ -60,7 +58,7 @@ class ErrorCode(Enum):
     METADATA_REFERENCE_MISMATCH = (2110, ErrorSeverity.ERROR, ErrorCategory.METADATA_ERROR, "Metadata reference and VCF reference do not match")
     METADATA_BIOSAMPLE_MISMATCH = (2111, ErrorSeverity.ERROR, ErrorCategory.METADATA_ERROR, "Metadata biosample_id and VCF biosample_id do not match")
     METADATA_POPULATION_MISMATCH = (2112, ErrorSeverity.ERROR, ErrorCategory.METADATA_ERROR, "Metadata SampleSet_id and VCF population_id do not match")
-    
+
     # INFO tag-related errors (2200s)
     INFO_TAG_PARSE_ERROR = (2201, ErrorSeverity.ERROR, ErrorCategory.HEADER_ERROR, "INFO tag definition parse error")
     MISSING_VRT_TAG = (2202, ErrorSeverity.ERROR, ErrorCategory.VALIDATION_ERROR, "Required VRT tag is missing")
@@ -71,7 +69,7 @@ class ErrorCode(Enum):
     UNDEFINED_INFO_TAG = (2207, ErrorSeverity.WARNING, ErrorCategory.HEADER_ERROR, "INFO tag is not defined in the VCF header")
     INVALID_INFO_TAG_TYPE = (2208, ErrorSeverity.ERROR, ErrorCategory.VALIDATION_ERROR, "INFO tag value type is invalid")
     UNSUPPORTED_DBSNP_INFO_TAG = (2209, ErrorSeverity.WARNING, ErrorCategory.HEADER_ERROR, "INFO tag is not supported in dbSNP VCF output")
-    
+
     # FORMAT tag-related errors (2300s)
     FORMAT_TAG_PARSE_ERROR = (2301, ErrorSeverity.ERROR, ErrorCategory.HEADER_ERROR, "FORMAT tag definition parse error")
     MISSING_POPULATION_ID = (2302, ErrorSeverity.ERROR, ErrorCategory.METADATA_ERROR, "Population ID is not defined")
@@ -80,11 +78,10 @@ class ErrorCode(Enum):
     INVALID_FORMAT_TAG_VALUE = (2305, ErrorSeverity.WARNING, ErrorCategory.VALIDATION_ERROR, "FORMAT tag value is invalid")
     UNDEFINED_FORMAT_TAG = (2306, ErrorSeverity.WARNING, ErrorCategory.HEADER_ERROR, "FORMAT tag is not defined in the VCF header")
     MISSING_POPULATION_DATA = (2307, ErrorSeverity.ERROR, ErrorCategory.DATA_ERROR, "Population ID is defined but population data is missing")
-    
+
     # Data line-related errors (3000s)
     INSUFFICIENT_FIELDS = (3001, ErrorSeverity.ERROR, ErrorCategory.DATA_ERROR, "Insufficient required fields (minimum 8: CHROM, POS, ID, REF, ALT, QUAL, FILTER, INFO)")
     INVALID_POSITION = (3002, ErrorSeverity.ERROR, ErrorCategory.DATA_ERROR, "Position value is invalid (must be integer)")
-    INVALID_REF_ALT = (3003, ErrorSeverity.ERROR, ErrorCategory.DATA_ERROR, "REF or ALT value is invalid")
     EMPTY_REF_ALT = (3004, ErrorSeverity.ERROR, ErrorCategory.DATA_ERROR, "REF or ALT is empty")
     VARIANT_TOO_LONG = (3005, ErrorSeverity.ERROR, ErrorCategory.VALIDATION_ERROR, "Variant exceeds 50bp; submit as SV for variants >50bp")
     INVALID_REF_BASE = (3006, ErrorSeverity.ERROR, ErrorCategory.DATA_ERROR, "REF contains non-ATGC characters (only A, T, G, C allowed; N, IUPAC ambiguity codes, and '*' are not permitted)")
@@ -95,11 +92,10 @@ class ErrorCode(Enum):
     MISSING_LOCAL_ID = (3011, ErrorSeverity.ERROR, ErrorCategory.DATA_ERROR, "Local ID is missing")
     LOCAL_ID_TOO_LONG = (3012, ErrorSeverity.ERROR, ErrorCategory.DATA_ERROR, "Local ID exceeds 64 characters")
     DUPLICATE_LOCAL_ID = (3013, ErrorSeverity.ERROR, ErrorCategory.VALIDATION_ERROR, "Local ID is duplicated")
-    
+
     # Data validation-related errors (3100s)
     VRT_REF_ALT_MISMATCH = (3101, ErrorSeverity.WARNING, ErrorCategory.VALIDATION_ERROR, "VRT value was corrected to match REF/ALT length-based classification")
     INVALID_ALLELE_FREQUENCY = (3102, ErrorSeverity.ERROR, ErrorCategory.VALIDATION_ERROR, "Allele frequency value is invalid (must be in range 0-1)")
-    MISSING_ALLELE_FREQUENCY = (3103, ErrorSeverity.WARNING, ErrorCategory.VALIDATION_ERROR, "Allele frequency information is missing")
     DUPLICATE_VARIANT_SITE = (3104, ErrorSeverity.ERROR, ErrorCategory.VALIDATION_ERROR, "Variant site is duplicated")
     ALLELE_COUNT_EXCEEDS_NUMBER = (3105, ErrorSeverity.ERROR, ErrorCategory.VALIDATION_ERROR, "Allele count exceeds allele number")
     CHROMOSOME_NOT_GROUPED = (3106, ErrorSeverity.ERROR, ErrorCategory.VALIDATION_ERROR, "Data on the same chromosome are not grouped together")
@@ -107,17 +103,13 @@ class ErrorCode(Enum):
     SNP_DENSITY_TOO_HIGH = (3108, ErrorSeverity.WARNING, ErrorCategory.VALIDATION_ERROR, "More than 10 SNPs are present in a 50bp window")
     ALLELE_FREQUENCY_CALCULATED = (3109, ErrorSeverity.INFO, ErrorCategory.VALIDATION_ERROR, "Allele frequency was calculated from AC and AN")
     INVALID_ALLELE_COUNT = (3110, ErrorSeverity.ERROR, ErrorCategory.VALIDATION_ERROR, "Allele count must be greater than zero")
-    
+
     # Conversion-related errors (4000s)
-    CONVERSION_FAILED = (4001, ErrorSeverity.ERROR, ErrorCategory.CONVERSION_ERROR, "TSV conversion failed")
-    MISSING_REQUIRED_FIELD = (4002, ErrorSeverity.ERROR, ErrorCategory.CONVERSION_ERROR, "Required field is missing; cannot convert")
-    
+
     # Format-related errors (5000s)
-    INVALID_TAB_SEPARATOR = (5001, ErrorSeverity.ERROR, ErrorCategory.FORMAT_ERROR, "Tab separator is invalid")
-    INVALID_INFO_FORMAT = (5002, ErrorSeverity.WARNING, ErrorCategory.FORMAT_ERROR, "INFO field format is invalid")
     INVALID_POPULATION_FORMAT = (5003, ErrorSeverity.ERROR, ErrorCategory.FORMAT_ERROR, "Population data format is invalid")
     INVALID_POPULATION_VALUE_TYPE = (5004, ErrorSeverity.ERROR, ErrorCategory.FORMAT_ERROR, "Population data value type is invalid")
-    
+
     # Reference genome validation errors (6000s)
     REF_MISMATCH = (6001, ErrorSeverity.ERROR, ErrorCategory.VALIDATION_ERROR, "VCF REF sequence does not match reference genome")
     CHROMOSOME_NOT_FOUND = (6002, ErrorSeverity.ERROR, ErrorCategory.VALIDATION_ERROR, "Chromosome not found in reference genome")
@@ -125,7 +117,7 @@ class ErrorCode(Enum):
     FASTA_INDEX_ERROR = (6004, ErrorSeverity.CRITICAL, ErrorCategory.FILE_ERROR, "FASTA index file create/read error")
     FASTA_READ_ERROR = (6005, ErrorSeverity.CRITICAL, ErrorCategory.FILE_ERROR, "FASTA file read error")
     REFERENCE_CORRECTED = (6006, ErrorSeverity.INFO, ErrorCategory.METADATA_ERROR, "Reference replaced with metadata file value in output")
-    
+
     def __init__(self, code: int, severity: ErrorSeverity, category: ErrorCategory, message: str):
         self.code = code
         self.severity = severity
@@ -144,7 +136,7 @@ class ParseError:
     actual_value: Optional[str] = None
     additional_info: Dict[str, Any] = field(default_factory=dict)
     timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
-    
+
     def __str__(self) -> str:
         """Represent error as string"""
         parts = [
@@ -152,24 +144,24 @@ class ParseError:
             f"{self.error_code.category.value}",
             f"{self.error_code.message}"
         ]
-        
+
         if self.line_number:
             parts.append(f"(line {self.line_number})")
-        
+
         if self.field_name:
             parts.append(f"field: {self.field_name}")
-        
+
         if self.expected_value:
             parts.append(f"expected: {self.expected_value}")
-        
+
         if self.actual_value:
             parts.append(f"actual: {self.actual_value}")
-        
+
         if self.line_content:
             parts.append(f"content: {self.line_content[:100]}")
-        
+
         return " | ".join(parts)
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert error to dictionary"""
         return {
@@ -189,22 +181,30 @@ class ParseError:
 
 class ErrorHandler:
     """Error collection and management class"""
-    
-    def __init__(self):
+
+    def __init__(self, max_details_per_code: int = 100):
+        if max_details_per_code < 0:
+            raise ValueError("max_details_per_code must be non-negative")
+        self.max_details_per_code = max_details_per_code
         self.errors: List[ParseError] = []
         self.error_counts: Dict[ErrorCode, int] = {}
         self.severity_counts: Dict[ErrorSeverity, int] = {}
         self.category_counts: Dict[ErrorCategory, int] = {}
-    
+        self.suppressed_counts: Dict[ErrorCode, int] = {}
+
     def add_error(self, error: ParseError) -> None:
         """Add error"""
-        self.errors.append(error)
-        
         # Update statistics
-        self.error_counts[error.error_code] = self.error_counts.get(error.error_code, 0) + 1
+        code_count = self.error_counts.get(error.error_code, 0) + 1
+        self.error_counts[error.error_code] = code_count
         self.severity_counts[error.error_code.severity] = self.severity_counts.get(error.error_code.severity, 0) + 1
         self.category_counts[error.error_code.category] = self.category_counts.get(error.error_code.category, 0) + 1
-    
+
+        if code_count <= self.max_details_per_code:
+            self.errors.append(error)
+        else:
+            self.suppressed_counts[error.error_code] = self.suppressed_counts.get(error.error_code, 0) + 1
+
     def create_error(
         self,
         error_code: ErrorCode,
@@ -227,32 +227,20 @@ class ErrorHandler:
         )
         self.add_error(error)
         return error
-    
+
     def has_errors(self, severity: Optional[ErrorSeverity] = None) -> bool:
         """Check if any errors exist"""
         if severity is None:
-            return len(self.errors) > 0
-        return any(e.error_code.severity == severity for e in self.errors)
-    
+            return sum(self.error_counts.values()) > 0
+        return self.severity_counts.get(severity, 0) > 0
+
     def has_critical_errors(self) -> bool:
         """Check if any critical errors exist"""
         return self.has_errors(ErrorSeverity.CRITICAL)
 
-    def has_fatal_errors(self) -> bool:
-        """Check if processing must stop immediately."""
-        return self.has_critical_errors()
-
     def has_blocking_errors(self) -> bool:
         """Check if final outputs must be blocked."""
         return self.has_errors(ErrorSeverity.CRITICAL) or self.has_errors(ErrorSeverity.ERROR)
-
-    def get_validation_status(self) -> str:
-        """Return the final validation status from collected messages."""
-        if self.has_blocking_errors():
-            return "ERROR"
-        if self.has_errors(ErrorSeverity.WARNING):
-            return "WARNING"
-        return "OK"
 
     def assert_no_blocking_errors(
         self,
@@ -278,34 +266,38 @@ class ErrorHandler:
             f"{summary['critical_count']} critical and "
             f"{summary['error_count']} error message(s)."
         )
-    
+
     def get_errors_by_severity(self, severity: ErrorSeverity) -> List[ParseError]:
         """Filter errors by severity"""
         return [e for e in self.errors if e.error_code.severity == severity]
-    
-    def get_errors_by_category(self, category: ErrorCategory) -> List[ParseError]:
-        """Filter errors by category"""
-        return [e for e in self.errors if e.error_code.category == category]
-    
-    def get_errors_by_code(self, error_code: ErrorCode) -> List[ParseError]:
-        """Filter errors by error code"""
-        return [e for e in self.errors if e.error_code == error_code]
-    
+
+    def get_messages(self, severity: Optional[ErrorSeverity] = None) -> List[ParseError]:
+        """Return retained message details, optionally filtered by severity."""
+        if severity is None:
+            return list(self.errors)
+        return self.get_errors_by_severity(severity)
+
     def get_summary(self) -> Dict[str, Any]:
         """Return error summary"""
+        total_errors = sum(self.error_counts.values())
+        suppressed_count = sum(self.suppressed_counts.values())
         return {
-            "total_errors": len(self.errors),
+            "total_errors": total_errors,
             "critical_count": self.severity_counts.get(ErrorSeverity.CRITICAL, 0),
             "error_count": self.severity_counts.get(ErrorSeverity.ERROR, 0),
             "warning_count": self.severity_counts.get(ErrorSeverity.WARNING, 0),
             "info_count": self.severity_counts.get(ErrorSeverity.INFO, 0),
+            "max_details_per_code": self.max_details_per_code,
+            "stored_detail_count": len(self.errors),
+            "suppressed_count": suppressed_count,
             "error_counts_by_code": {code.name: count for code, count in self.error_counts.items()},
-            "errors_by_category": {cat.value: len(self.get_errors_by_category(cat)) for cat in ErrorCategory},
-            "errors_by_severity": {sev.value: len(self.get_errors_by_severity(sev)) for sev in ErrorSeverity}
+            "suppressed_counts_by_code": {code.name: count for code, count in self.suppressed_counts.items()},
+            "errors_by_category": {cat.value: self.category_counts.get(cat, 0) for cat in ErrorCategory},
+            "errors_by_severity": {sev.value: self.severity_counts.get(sev, 0) for sev in ErrorSeverity}
         }
-    
+
     def generate_report(
-        self, 
+        self,
         output_file: Optional[str] = None,
         vcf_file_path: Optional[str] = None,
         output_tsv_path: Optional[str] = None
@@ -318,23 +310,23 @@ class ErrorHandler:
         report_lines.append("KVar SNP VCF Parsing Error Report")
         report_lines.append("")
         report_lines.append("=" * 80)
-        
+
         # Add absolute path information
         if vcf_file_path:
             abs_vcf_path = os.path.abspath(vcf_file_path)
             report_lines.append(f"VCF file absolute path: {abs_vcf_path}")
-        
+
         if output_file:
             abs_error_path = os.path.abspath(output_file)
             report_lines.append(f"Error report absolute path: {abs_error_path}")
-        
+
         if output_tsv_path:
             abs_tsv_path = os.path.abspath(output_tsv_path)
             report_lines.append(f"Output TSV file absolute path: {abs_tsv_path}")
-        
+
         report_lines.append(f"Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         report_lines.append("")
-        
+
         # Summary
         summary = self.get_summary()
         report_lines.append("=== Error Summary ===")
@@ -343,68 +335,83 @@ class ErrorHandler:
         report_lines.append(f"  Error: {summary['error_count']}")
         report_lines.append(f"  Warning: {summary['warning_count']}")
         report_lines.append(f"  Info: {summary['info_count']}")
+        report_lines.append(f"Detail cap per code: {summary['max_details_per_code']}")
+        report_lines.append(f"Stored message details: {summary['stored_detail_count']}")
+        report_lines.append(f"Suppressed message details: {summary['suppressed_count']}")
         report_lines.append("")
-        
+
         # Statistics by category
         report_lines.append("=== Errors by Category ===")
         for category, count in summary['errors_by_category'].items():
             if count > 0:
                 report_lines.append(f"  {category}: {count}")
         report_lines.append("")
-        
+
         # Statistics by error code
         if summary['error_counts_by_code']:
             report_lines.append("=== Statistics by Error Code ===")
             for code_name, count in sorted(summary['error_counts_by_code'].items(), key=lambda x: x[1], reverse=True):
-                report_lines.append(f"  {code_name}: {count}")
+                suppressed = summary['suppressed_counts_by_code'].get(code_name, 0)
+                if suppressed:
+                    report_lines.append(f"  {code_name}: {count} (suppressed details: {suppressed})")
+                else:
+                    report_lines.append(f"  {code_name}: {count}")
             report_lines.append("")
-        
+
         # Detailed error list
         if self.errors:
             report_lines.append("=== Detailed Error List ===")
-            
+
             # Group by severity
             for severity in [ErrorSeverity.CRITICAL, ErrorSeverity.ERROR, ErrorSeverity.WARNING, ErrorSeverity.INFO]:
                 errors = self.get_errors_by_severity(severity)
                 if errors:
-                    report_lines.append(f"\n[{severity.value}] ({len(errors)} items)")
+                    total_by_severity = self.severity_counts.get(severity, 0)
+                    suppressed_by_severity = total_by_severity - len(errors)
+                    report_lines.append(f"\n[{severity.value}] ({total_by_severity} total, {len(errors)} stored)")
                     report_lines.append("-" * 80)
                     for i, error in enumerate(errors, 1):
                         report_lines.append(f"{i}. {error}")
                         if error.additional_info:
                             for key, value in error.additional_info.items():
                                 report_lines.append(f"   - {key}: {value}")
-        
+                    if suppressed_by_severity > 0:
+                        report_lines.append(f"... {suppressed_by_severity} more message detail(s) suppressed")
+
         report_text = "\n".join(report_lines)
-        
+
         # Save to file
         if output_file:
             with open(output_file, 'w', encoding='utf-8') as f:
                 f.write(report_text)
-        
+
         return report_text
-    
+
     def generate_json_report(self, output_file: Optional[str] = None) -> Dict[str, Any]:
-        """Generate error report in JSON format"""
+        """Generate error report in JSON format."""
         report = {
             "timestamp": datetime.now().isoformat(),
             "summary": self.get_summary(),
-            "errors": [error.to_dict() for error in self.errors]
+            "errors": [error.to_dict() for error in self.errors],
+            "suppressed_counts_by_code": {
+                code.name: count for code, count in self.suppressed_counts.items()
+            },
         }
-        
+
         if output_file:
             with open(output_file, 'w', encoding='utf-8') as f:
                 json.dump(report, f, ensure_ascii=False, indent=2)
-        
+
         return report
-    
+
     def clear(self) -> None:
         """Clear all errors"""
         self.errors.clear()
         self.error_counts.clear()
         self.severity_counts.clear()
         self.category_counts.clear()
-    
+        self.suppressed_counts.clear()
+
     def print_summary(self) -> None:
         """Print error summary to console"""
         summary = self.get_summary()
@@ -414,7 +421,7 @@ class ErrorHandler:
         print(f"  Error: {summary['error_count']}")
         print(f"  Warning: {summary['warning_count']}")
         print(f"  Info: {summary['info_count']}")
-        
+
         if summary['total_errors'] > 0:
             print("\nTop error codes:")
             for code_name, count in sorted(summary['error_counts_by_code'].items(), key=lambda x: x[1], reverse=True)[:10]:

@@ -3,9 +3,11 @@
 """Validate and rewrite a cleaned dbSNP VCF file."""
 
 import argparse
+import copy
 import gzip
 import os
 import sys
+import tempfile
 from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -58,6 +60,7 @@ class DbSNPVCFCleaner:
         self.metadata_info: Optional[MetadataInfo] = None
         self.contig_lines: List[str] = []
         self._warned_unsupported_output_info_tags = set()
+        self._used_output_info_id_set = set()
 
     def clean(
         self,
@@ -71,9 +74,9 @@ class DbSNPVCFCleaner:
             metadata_validator = MetadataValidator(self.error_handler)
             self.metadata_info = metadata_validator.parse_metadata_file(metadata_file_path)
 
-        self.parser.parse_file(vcf_file_path)
+        self.parser.parse_header(vcf_file_path)
         self.contig_lines = self._read_contig_lines(vcf_file_path)
-        self._record_unsupported_info_tags()
+        self._record_unsupported_header_info_tags()
 
         if self.metadata_info:
             metadata_validator = MetadataValidator(self.error_handler)
@@ -84,7 +87,7 @@ class DbSNPVCFCleaner:
             )
             self._apply_metadata_values()
 
-        self._correct_vrt_values()
+        self._validate_streaming_rows(vcf_file_path)
 
         if error_report_path is None:
             error_report_path = self._default_report_path(output_file_path)
@@ -96,7 +99,7 @@ class DbSNPVCFCleaner:
             output_tsv_path=output_file_path,
         )
 
-        self._write_cleaned_vcf(output_file_path)
+        self._write_cleaned_vcf(vcf_file_path, output_file_path)
         self.error_handler.generate_report(
             error_report_path,
             vcf_file_path=vcf_file_path,
@@ -154,15 +157,24 @@ class DbSNPVCFCleaner:
         if self.metadata_info.sampleset_ids:
             self.parser.header.population_ids = list(self.metadata_info.sampleset_ids)
 
-    def _correct_vrt_values(self) -> None:
-        """Correct VRT values that do not match REF/ALT classification."""
-        for row in self.parser.data_rows:
-            expected_vrt = self._calculate_vrt(row.ref, row.alt)
-            if expected_vrt is None:
-                continue
-            current_vrt = row.info.get("VRT")
-            if current_vrt == expected_vrt:
-                continue
+    def _validate_streaming_rows(self, vcf_file_path: str) -> None:
+        """Validate data rows without retaining them all in memory."""
+        self._used_output_info_id_set.clear()
+        for row in self.parser.iter_data_rows(vcf_file_path, store_rows=False):
+            self._record_unsupported_row_info_tags(row)
+            self._record_used_output_info_ids(row.info)
+            self._correct_vrt_value(row, record_warning=True)
+        self.parser.validate_parsed_data()
+
+    def _correct_vrt_value(self, row: VCFDataRow, record_warning: bool) -> None:
+        """Correct one row's VRT value when it differs from REF/ALT classification."""
+        expected_vrt = self._calculate_vrt(row.ref, row.alt)
+        if expected_vrt is None:
+            return
+        current_vrt = row.info.get("VRT")
+        if current_vrt == expected_vrt:
+            return
+        if record_warning:
             self.error_handler.create_error(
                 ErrorCode.VRT_REF_ALT_MISMATCH,
                 field_name="VRT",
@@ -173,7 +185,7 @@ class DbSNPVCFCleaner:
                     "action": "Output VCF uses the REF/ALT-derived VRT value",
                 },
             )
-            row.info["VRT"] = expected_vrt
+        row.info["VRT"] = expected_vrt
 
     @staticmethod
     def _calculate_vrt(ref: str, alt: str) -> Optional[int]:
@@ -200,22 +212,44 @@ class DbSNPVCFCleaner:
             return 2
         return 1
 
-    def _write_cleaned_vcf(self, output_file_path: str) -> None:
-        """Write the cleaned dbSNP VCF file."""
-        opener = gzip.open if output_file_path.endswith(".gz") else open
-        with opener(output_file_path, "wt", encoding="utf-8") as handle:
+    def _write_cleaned_vcf(self, vcf_file_path: str, output_file_path: str) -> None:
+        """Atomically write the cleaned dbSNP VCF file after validation succeeds."""
+        output_dir = os.path.dirname(os.path.abspath(output_file_path)) or "."
+        output_base = os.path.basename(output_file_path)
+        fd, temp_path = tempfile.mkstemp(
+            prefix=f".{output_base}.",
+            suffix=".tmp",
+            dir=output_dir,
+        )
+        os.close(fd)
+
+        try:
+            self._write_cleaned_vcf_to_path(vcf_file_path, temp_path, output_file_path.endswith(".gz"))
+            os.replace(temp_path, output_file_path)
+        except Exception:
+            if os.path.exists(temp_path):
+                os.unlink(temp_path)
+            raise
+
+    def _write_cleaned_vcf_to_path(self, vcf_file_path: str, path: str, gzip_output: bool) -> None:
+        """Stream cleaned VCF content to an already-created temporary path."""
+        opener = gzip.open if gzip_output else open
+        writer_parser = dbSNPVCFParser(ErrorHandler())
+        writer_parser.header = copy.deepcopy(self.parser.header)
+        with opener(path, "wt", encoding="utf-8") as handle:
             self._write_metadata(handle)
             self._write_info_tags(handle)
             self._write_format_tags(handle)
             self._write_population_ids(handle)
             self._write_column_header(handle)
-            for row in self.parser.data_rows:
+            for row in writer_parser.iter_data_rows(vcf_file_path, store_rows=False):
+                self._correct_vrt_value(row, record_warning=False)
                 self._write_data_row(handle, row)
 
     def _write_metadata(self, handle) -> None:
         """Write VCF metadata header lines."""
         metadata = self.parser.header.metadata
-        handle.write(f"##fileformat={metadata.fileformat or 'VCFv4.1'}\n")
+        handle.write("##fileformat=VCFv4.1\n")
         handle.write(f"##fileDate={metadata.filedate or datetime.now().strftime('%Y%m%d')}\n")
 
         if metadata.handle:
@@ -259,23 +293,34 @@ class DbSNPVCFCleaner:
 
     def _used_output_info_ids(self) -> set:
         """Return retained INFO IDs that are present in parsed rows."""
+        if self._used_output_info_id_set:
+            return set(self._used_output_info_id_set)
+
         used_ids = set()
         for row in self.parser.data_rows:
-            for tag_id in row.info:
-                output_id = get_vcf_info_output_id(tag_id)
-                if output_id in DBSNP_OUTPUT_INFO_IDS:
-                    used_ids.add(output_id)
+            self._record_used_output_info_ids(row.info, used_ids)
         return used_ids
 
-    def _record_unsupported_info_tags(self) -> None:
-        """Record unsupported INFO tags that will be excluded from output."""
+    def _record_used_output_info_ids(self, info: Dict[str, Any], used_ids: Optional[set] = None) -> None:
+        """Record dbSNP output INFO IDs present in one row."""
+        target = used_ids if used_ids is not None else self._used_output_info_id_set
+        for tag_id in info:
+            output_id = get_vcf_info_output_id(tag_id)
+            if output_id not in DBSNP_OUTPUT_INFO_IDS:
+                continue
+            target.add(output_id)
+
+    def _record_unsupported_header_info_tags(self) -> None:
+        """Record unsupported INFO header tags that will be excluded from output."""
         for tag_id in self.parser.header.info_tags:
             if not is_dbsnp_output_info_id(tag_id):
                 self._warn_unsupported_output_info_tag(tag_id, context="INFO header")
-        for row in self.parser.data_rows:
-            for tag_id in row.info:
-                if not is_dbsnp_output_info_id(tag_id):
-                    self._warn_unsupported_output_info_tag(tag_id, context="INFO field")
+
+    def _record_unsupported_row_info_tags(self, row: VCFDataRow) -> None:
+        """Record unsupported INFO data tags that will be excluded from output."""
+        for tag_id in row.info:
+            if not is_dbsnp_output_info_id(tag_id):
+                self._warn_unsupported_output_info_tag(tag_id, context="INFO field")
 
     def _warn_unsupported_output_info_tag(self, tag_id: str, context: str) -> None:
         """Record one warning for an INFO tag excluded from dbSNP VCF output."""
@@ -298,7 +343,7 @@ class DbSNPVCFCleaner:
     @staticmethod
     def _format_info_definition(output_id: str, tag_def: InfoTagDefinition) -> str:
         """Return an INFO definition line."""
-        description = tag_def.description.replace('"', "'")
+        description = DbSNPVCFCleaner._escape_vcf_description(tag_def.description)
         return (
             f'##INFO=<ID={output_id},Number={tag_def.number},'
             f'Type={tag_def.type},Description="{description}">'
@@ -307,11 +352,16 @@ class DbSNPVCFCleaner:
     def _write_format_tags(self, handle) -> None:
         """Write FORMAT tag definitions."""
         for tag_def in self.parser.header.format_tags.values():
-            description = tag_def.description.replace('"', "'")
+            description = self._escape_vcf_description(tag_def.description)
             handle.write(
                 f'##FORMAT=<ID={tag_def.id},Number={tag_def.number},'
                 f'Type={tag_def.type},Description="{description}">\n'
             )
+
+    @staticmethod
+    def _escape_vcf_description(description: str) -> str:
+        """Escape description text for a VCF header line."""
+        return description.replace('\\', '\\\\').replace('"', '\\"')
 
     def _write_population_ids(self, handle) -> None:
         """Write population_id header lines."""
@@ -388,26 +438,3 @@ class DbSNPVCFCleaner:
         if isinstance(value, list):
             return ",".join(str(item) for item in value)
         return str(value)
-
-
-def main() -> None:
-    """Run the dbSNP VCF cleaner CLI."""
-    parser = argparse.ArgumentParser(description="Validate and rewrite a cleaned dbSNP VCF file")
-    parser.add_argument("--vcf", required=True, help="Input dbSNP VCF path")
-    parser.add_argument("--output", required=True, help="Output cleaned dbSNP VCF path")
-    parser.add_argument("--metadata", help="Optional metadata file path")
-    parser.add_argument("--error-report", help="Optional validation report path")
-    args = parser.parse_args()
-
-    cleaner = DbSNPVCFCleaner()
-    cleaner.clean(
-        vcf_file_path=args.vcf,
-        output_file_path=args.output,
-        metadata_file_path=args.metadata,
-        error_report_path=args.error_report,
-    )
-    print(f"Cleaned dbSNP VCF written: {os.path.abspath(args.output)}")
-
-
-if __name__ == "__main__":
-    main()

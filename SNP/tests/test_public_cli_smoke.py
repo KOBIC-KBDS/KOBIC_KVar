@@ -46,11 +46,14 @@ def test_generic_to_dbsnp_writes_population_id_only(tmp_dir):
     )
 
     output_text = output_vcf.read_text(encoding="utf-8")
+    assert output_text.startswith("##fileformat=VCFv4.1\n")
     assert "##population_id=POP1" in output_text
     assert "##contig=<ID=chr1,length=20>" in output_text
     assert "##SampleSet_id=" not in output_text
     assert "VRT=1" in output_text
     assert "AF=0.2" in output_text
+    for format_id in ("NA", "NS", "FRQ", "AC"):
+        assert output_text.count(f"##FORMAT=<ID={format_id},") == 1
     assert error_report.exists()
 
 
@@ -65,6 +68,10 @@ def test_validate_dbsnp_writes_cleaned_vcf(tmp_dir):
         "##INFO=<ID=CSQ,Number=.,Type=String,Description=\"Consequence annotations. Format: Allele|Consequence\">\n"
         "##INFO=<ID=61KJPN_AC,Number=A,Type=Integer,Description=\"61KJPN allele count\">\n"
         "##FORMAT=<ID=NA",
+    )
+    input_text = input_text.replace(
+        'Description="Number of alleles for the population"',
+        r'Description="Number of alleles for the population \tmp"',
     )
     input_text = input_text.replace(
         "VRT=1;AC=2;AN=10;AF=0.2",
@@ -88,10 +95,12 @@ def test_validate_dbsnp_writes_cleaned_vcf(tmp_dir):
     )
 
     output_text = output_vcf.read_text(encoding="utf-8")
+    assert output_text.startswith("##fileformat=VCFv4.1\n")
     assert "##population_id=POP1" in output_text
     assert "##contig=<ID=chr1,length=20>" in output_text
     assert "##SampleSet_id=" not in output_text
     assert output_text.count("##INFO=<ID=VRT") == 1
+    assert r'Description="Number of alleles for the population \\tmp"' in output_text
     assert "\tNA:FRQ\t10:0.2" in output_text
     assert "CSQ" not in output_text
     assert "61KJPN_AC" not in output_text

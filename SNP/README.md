@@ -18,21 +18,8 @@ Run the commands below from this `SNP/` directory.
 
 ### Prerequisites
 
-**Runtime:**
-
 - Python 3.8 or higher
-
-**Python packages:**
-
-- `pyfaidx` (>= 0.8) — required only for reference FASTA validation
-
-### Installation
-
-Install the Python dependencies:
-
-```bash
-pip install -r requirements.txt
-```
+- `pyfaidx` >= 0.8 (`pip install -r requirements.txt`)
 
 ## Quick Start
 
@@ -101,7 +88,13 @@ SNP/
 ├── README.md            # This file
 ├── requirements.txt
 ├── src/kvar_snp_tools/
-│   └── Sub_validator.py               # Public CLI entry point
+│   ├── Sub_validator.py               # Public CLI entry point
+│   ├── VCF2dbSNP.py                   # Generic VCF -> dbSNP VCF conversion
+│   ├── dbsnp_vcf_cleaner.py           # dbSNP VCF validation & cleaning
+│   ├── dbSNP_parser.py                # Streaming dbSNP VCF parser
+│   ├── VCF_ref_check.py               # Optional REF check against a reference FASTA
+│   ├── metadata_validator.py          # Metadata -> VCF header translation
+│   └── error_handler.py               # Error codes and validation report
 ├── examples/            # Toy inputs for trying the commands
 └── tests/               # CLI smoke tests
 ```
@@ -110,6 +103,7 @@ SNP/
 
 ```bash
 python tests/test_public_cli_smoke.py
+python tests/test_public_dbsnp_cleaner_streaming.py
 ```
 
 ## Notes

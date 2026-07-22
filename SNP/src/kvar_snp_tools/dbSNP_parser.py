@@ -8,7 +8,7 @@ Parses VCF files conforming to dbSNP VCF submission format and extracts all info
 import re
 import os
 import gzip
-from typing import Dict, List, Optional, Any, Tuple, Set
+from typing import Callable, Dict, Iterator, List, Optional, Any, Tuple, Set
 from dataclasses import dataclass, field
 from collections import defaultdict
 
@@ -76,7 +76,7 @@ class VCFDataRow:
 
 class dbSNPVCFParser:
     """Main class to parse dbSNP VCF files"""
-    
+
     def __init__(self, error_handler: Optional[ErrorHandler] = None):
         self.header = VCFHeader()
         self.data_rows: List[VCFDataRow] = []
@@ -119,90 +119,125 @@ class dbSNPVCFParser:
         self._density_chromosome: Optional[str] = None
         self._density_window_start: Optional[int] = None
         self._density_window_count = 0
-        
-    def parse_file(self, file_path: str) -> None:
-        """Main method to parse VCF file (gzip supported)"""
-        # Check file existence
-        if not os.path.exists(file_path):
-            self.error_handler.create_error(
-                ErrorCode.FILE_NOT_FOUND,
-                additional_info={"file_path": file_path}
-            )
-            raise FileNotFoundError(f"File not found: {file_path}")
+        self._parsed_row_count = 0
+        self._has_population_data = False
 
+    def parse_header(self, file_path: str) -> None:
+        """Parse only VCF header lines."""
+        self._reset_parse_state()
+        self._ensure_file_exists(file_path)
+
+        header_lines = []
+        try:
+            with self._open_text(file_path) as f:
+                for _line_num, line in enumerate(f, 1):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    if not line.startswith('#'):
+                        break
+                    header_lines.append(line)
+        except UnicodeDecodeError as e:
+            self.error_handler.create_error(
+                ErrorCode.FILE_ENCODING_ERROR,
+                additional_info={"file_path": file_path, "error": str(e)}
+            )
+            raise
+        except Exception as e:
+            self.error_handler.create_error(
+                ErrorCode.FILE_READ_ERROR,
+                additional_info={"file_path": file_path, "error": str(e)}
+            )
+            raise
+
+        self._parse_header(header_lines)
+
+    def iter_data_rows(
+        self,
+        file_path: str,
+        store_rows: bool = False,
+        row_callback: Optional[Callable[[VCFDataRow], None]] = None,
+    ) -> Iterator[VCFDataRow]:
+        """Yield parsed data rows without retaining the whole VCF in memory."""
+        self._reset_row_state(clear_rows=store_rows)
+        self._ensure_file_exists(file_path)
+
+        try:
+            with self._open_text(file_path) as f:
+                for line_num, line in enumerate(f, 1):
+                    original_line = line
+                    line = line.strip()
+                    if not line or line.startswith('#'):
+                        continue
+
+                    row = self._parse_data_row(original_line.strip(), line_num)
+                    if not row:
+                        continue
+
+                    self._record_parsed_row(row)
+                    if store_rows:
+                        self.data_rows.append(row)
+                    if row_callback:
+                        row_callback(row)
+                    yield row
+        except UnicodeDecodeError as e:
+            self.error_handler.create_error(
+                ErrorCode.FILE_ENCODING_ERROR,
+                additional_info={"file_path": file_path, "error": str(e)}
+            )
+            raise
+        except Exception as e:
+            self.error_handler.create_error(
+                ErrorCode.FILE_READ_ERROR,
+                additional_info={"file_path": file_path, "error": str(e)}
+            )
+            raise
+
+    def validate_parsed_data(self) -> None:
+        """Run validations that depend on all parsed data rows."""
+        self._validate_parsed_data()
+
+    def _reset_parse_state(self) -> None:
+        """Reset parsed header, retained rows, and streaming validation state."""
+        self.header = VCFHeader()
+        self.data_rows.clear()
+        self._seen_metadata_keys.clear()
+        self._warned_undefined_info_tags.clear()
+        self._warned_undefined_format_tags.clear()
+        self._reset_row_state(clear_rows=False)
+
+    def _reset_row_state(self, clear_rows: bool) -> None:
+        """Reset row-level validation state before a data pass."""
+        if clear_rows:
+            self.data_rows.clear()
         self._seen_local_ids.clear()
         self._seen_variant_sites.clear()
-        
-        # Separate header and data
-        header_lines = []
-        data_lines = []
-        in_header = True
-        
-        # Check if gzipped
+        self._current_chromosome = None
+        self._closed_chromosomes.clear()
+        self._previous_position = None
+        self._density_chromosome = None
+        self._density_window_start = None
+        self._density_window_count = 0
+        self._parsed_row_count = 0
+        self._has_population_data = False
+
+    @staticmethod
+    def _open_text(file_path: str):
+        """Open a plain or gzipped VCF path for text reading."""
         if file_path.endswith('.gz'):
-            try:
-                with gzip.open(file_path, 'rt', encoding='utf-8') as f:
-                    for line_num, line in enumerate(f, 1):
-                        original_line = line
-                        line = line.strip()
-                        if not line:
-                            continue
-                            
-                        if line.startswith('#'):
-                            header_lines.append(line)
-                        else:
-                            if in_header:
-                                in_header = False
-                            data_lines.append((line_num, original_line.strip()))
-            except UnicodeDecodeError as e:
-                self.error_handler.create_error(
-                    ErrorCode.FILE_ENCODING_ERROR,
-                    additional_info={"file_path": file_path, "error": str(e)}
-                )
-                raise
-            except Exception as e:
-                self.error_handler.create_error(
-                    ErrorCode.FILE_READ_ERROR,
-                    additional_info={"file_path": file_path, "error": str(e)}
-                )
-                raise
-        else:
-            try:
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    for line_num, line in enumerate(f, 1):
-                        original_line = line
-                        line = line.strip()
-                        if not line:
-                            continue
-                            
-                        if line.startswith('#'):
-                            header_lines.append(line)
-                        else:
-                            if in_header:
-                                in_header = False
-                            data_lines.append((line_num, original_line.strip()))
-            except UnicodeDecodeError as e:
-                self.error_handler.create_error(
-                    ErrorCode.FILE_ENCODING_ERROR,
-                    additional_info={"file_path": file_path, "error": str(e)}
-                )
-                raise
-            except Exception as e:
-                self.error_handler.create_error(
-                    ErrorCode.FILE_READ_ERROR,
-                    additional_info={"file_path": file_path, "error": str(e)}
-                )
-                raise
-        
-        # Parse header
-        self._parse_header(header_lines)
-        
-        # Parse data
-        self._parse_data(data_lines)
-        
-        # Required validation
-        self._validate_parsed_data()
-    
+            return gzip.open(file_path, 'rt', encoding='utf-8')
+        return open(file_path, 'r', encoding='utf-8')
+
+    def _ensure_file_exists(self, file_path: str) -> None:
+        """Record and raise for missing input files."""
+        if os.path.exists(file_path):
+            return
+        self.error_handler.create_error(
+            ErrorCode.FILE_NOT_FOUND,
+            additional_info={"file_path": file_path}
+        )
+        raise FileNotFoundError(f"File not found: {file_path}")
+
     def _parse_header(self, header_lines: List[str]) -> None:
         """Parse VCF header"""
         for line_num, line in enumerate(header_lines, 1):
@@ -210,7 +245,7 @@ class dbSNPVCFParser:
                 self._parse_metadata_line(line, line_num)
             elif line.startswith('#'):
                 self._parse_column_header(line, line_num)
-        
+
         # Required header validation
         if not self.header.metadata.fileformat:
             self.error_handler.create_error(
@@ -226,12 +261,12 @@ class dbSNPVCFParser:
                     actual_value=self.header.metadata.fileformat,
                     expected_value="VCFv format (e.g. VCFv4.1, VCFv4.2, VCFv4.3, VCFv4.4, VCFv4.5)"
                 )
-        
+
         if not self.header.column_header:
             self.error_handler.create_error(
                 ErrorCode.MISSING_COLUMN_HEADER
             )
-    
+
     def _parse_metadata_line(self, line: str, line_number: int) -> None:
         """Parse metadata line"""
         # Parse ##key=value format
@@ -242,11 +277,11 @@ class dbSNPVCFParser:
                 line_content=line
             )
             return
-        
+
         try:
             key, value = line[2:].split('=', 1)
             key = key.lower()
-            
+
             if key == 'fileformat':
                 if not self._validate_singleton_metadata_tag(key, line, line_number):
                     return
@@ -314,12 +349,12 @@ class dbSNPVCFParser:
 
         self._seen_metadata_keys.add(key)
         return True
-    
+
     def _parse_info_tag_definition(self, line: str, line_number: int) -> None:
         """Parse an INFO tag definition header line."""
-        pattern = r'##INFO=<ID=([^,]+),Number=([^,]+),Type=([^,]+),Description="([^"]+)"'
+        pattern = r'##INFO=<ID=([^,]+),Number=([^,]+),Type=([^,]+),Description="((?:\\.|[^"\\])*)"'
         match = re.search(pattern, line)
-        
+
         if match:
             tag_id, number, type_str, description = match.groups()
             self._store_info_tag_definition(tag_id, number, type_str, description, line, line_number)
@@ -336,7 +371,7 @@ class dbSNPVCFParser:
                     if desc_start != -1 and desc_end > desc_start:
                         desc_start += len(desc_key)
                         description = line[desc_start:desc_end]
-                        
+
                         self._store_info_tag_definition(
                             id_part,
                             number_part,
@@ -379,7 +414,7 @@ class dbSNPVCFParser:
         tag_id = tag_id.strip()
         number = number.strip()
         type_str = type_str.strip()
-        description = description.strip()
+        description = self._unescape_vcf_description(description.strip())
 
         if tag_id in self.header.info_tags:
             self.error_handler.create_error(
@@ -444,12 +479,12 @@ class dbSNPVCFParser:
                 actual_value=f"Number={number}; Type={type_str}; VRT map={parsed_vrt_map}",
                 additional_info={"issues": issues}
             )
-    
+
     def _parse_format_tag_definition(self, line: str, line_number: int) -> None:
         """Parse a FORMAT tag definition header line."""
-        pattern = r'##FORMAT=<ID=([^,]+),Number=([^,]+),Type=([^,]+),Description="([^"]+)"'
+        pattern = r'##FORMAT=<ID=([^,]+),Number=([^,]+),Type=([^,]+),Description="((?:\\.|[^"\\])*)"'
         match = re.search(pattern, line)
-        
+
         if match:
             tag_id, number, type_str, description = match.groups()
             self._store_format_tag_definition(tag_id, number, type_str, description, line, line_number)
@@ -466,7 +501,7 @@ class dbSNPVCFParser:
                     if desc_start != -1 and desc_end > desc_start:
                         desc_start += len(desc_key)
                         description = line[desc_start:desc_end]
-                        
+
                         self._store_format_tag_definition(
                             id_part,
                             number_part,
@@ -509,7 +544,7 @@ class dbSNPVCFParser:
         tag_id = tag_id.strip()
         number = number.strip()
         type_str = type_str.strip()
-        description = description.strip()
+        description = self._unescape_vcf_description(description.strip())
 
         if tag_id in self.header.format_tags:
             self.error_handler.create_error(
@@ -528,7 +563,12 @@ class dbSNPVCFParser:
             type=type_str,
             description=description
         )
-    
+
+    @staticmethod
+    def _unescape_vcf_description(description: str) -> str:
+        """Unescape quoted characters from a VCF header description."""
+        return re.sub(r'\\(["\\])', r'\1', description)
+
     def _parse_column_header(self, line: str, line_number: int) -> None:
         """Parse the VCF column header."""
         if self.header.column_header:
@@ -544,7 +584,7 @@ class dbSNPVCFParser:
 
         # #CHROM POS ID REF ALT QUAL FILTER INFO [FORMAT] [POPULATION_COLS]
         columns = line[1:].split('\t')
-        
+
         # Check the minimum required columns.
         required_columns = ['CHROM', 'POS', 'ID', 'REF', 'ALT', 'QUAL', 'FILTER', 'INFO']
         if len(columns) < len(required_columns):
@@ -555,20 +595,27 @@ class dbSNPVCFParser:
                 expected_value=f"at least {len(required_columns)} columns",
                 actual_value=f"{len(columns)} columns"
             )
-        
+
         self.header.column_header = columns
-    
+
     def _parse_data(self, data_lines: List[Tuple[int, str]]) -> None:
         """Parse VCF data lines."""
         for line_number, line in data_lines:
             row = self._parse_data_row(line, line_number)
             if row:
+                self._record_parsed_row(row)
                 self.data_rows.append(row)
-    
+
+    def _record_parsed_row(self, row: VCFDataRow) -> None:
+        """Track aggregate facts needed after a streaming data pass."""
+        self._parsed_row_count += 1
+        if row.population_data:
+            self._has_population_data = True
+
     def _parse_data_row(self, line: str, line_number: int) -> Optional[VCFDataRow]:
         """Parse one VCF data row."""
         fields = line.split('\t')
-        
+
         if len(fields) < 8:
             self.error_handler.create_error(
                 ErrorCode.INSUFFICIENT_FIELDS,
@@ -578,20 +625,21 @@ class dbSNPVCFParser:
                 actual_value=f"{len(fields)}"
             )
             return None
-        
+
         # Basic fields
         chrom = fields[0]
-        
+
         # Position validation
         try:
             pos = int(fields[1])
-            if pos < 0:
+            if pos < 1:
                 self.error_handler.create_error(
                     ErrorCode.INVALID_POSITION,
                     line_number=line_number,
                     line_content=line,
                     field_name="POS",
-                    actual_value=str(pos)
+                    actual_value=str(pos),
+                    expected_value="integer greater than or equal to 1"
                 )
                 return None
         except ValueError:
@@ -607,14 +655,14 @@ class dbSNPVCFParser:
         if not self._validate_chromosome_order(chrom, pos, line, line_number):
             return None
         self._check_snp_density(chrom, pos, line, line_number)
-        
+
         id_field = fields[2]
         ref = fields[3]
         alt = fields[4]
 
         if not self._validate_local_id(id_field, line, line_number):
             return None
-        
+
         # REF/ALT empty check
         if not ref or ref == '.':
             self.error_handler.create_error(
@@ -624,7 +672,7 @@ class dbSNPVCFParser:
                 field_name="REF"
             )
             return None
-        
+
         if not alt or alt == '.':
             self.error_handler.create_error(
                 ErrorCode.EMPTY_REF_ALT,
@@ -655,7 +703,7 @@ class dbSNPVCFParser:
                 expected_value="different REF and ALT alleles"
             )
             return None
-        
+
         # REF base validation: only A, T, G, C allowed (no N, no IUPAC ambiguity codes, no '*')
         valid_bases = set('ATGCatgc')
         if not all(c in valid_bases for c in ref):
@@ -676,7 +724,7 @@ class dbSNPVCFParser:
                 }
             )
             return None
-        
+
         # ALT allele validation: each allele must consist of only A, T, G, C
         # Multi-allelic sites are split by comma; each allele is validated independently
         alt_alleles = alt.split(',')
@@ -714,7 +762,7 @@ class dbSNPVCFParser:
                 expected_value="same leading base for indels"
             )
             return None
-        
+
         # Variant length check: exclude rows exceeding this limit.
         ref_len = len(ref)
         for alt_allele in alt_alleles:
@@ -737,10 +785,10 @@ class dbSNPVCFParser:
                     }
                 )
                 return None
-        
+
         qual = fields[5] if fields[5] != '.' else None
         filter_field = fields[6] if fields[6] != '.' else None
-        
+
         # Parse INFO field.
         info_dict = self._parse_info_field(fields[7], line_number, line)
 
@@ -755,16 +803,16 @@ class dbSNPVCFParser:
 
         if not self._validate_duplicate_site(chrom, pos, ref, alt, info_dict, line, line_number):
             return None
-        
+
         # Parse FORMAT and population data.
         format_data = {}
         population_data = {}
-        
+
         if len(fields) > 8:
             format_data, population_data = self._parse_format_and_population_data(
                 fields[8:], line_number, line
             )
-        
+
         return VCFDataRow(
             chrom=chrom,
             pos=pos,
@@ -1028,11 +1076,11 @@ class dbSNPVCFParser:
 
         self._seen_variant_sites.add(site_key)
         return True
-    
+
     def _parse_info_field(self, info_str: str, line_number: int, line: Optional[str] = None) -> Dict[str, Any]:
         """Parse an INFO field."""
         info_dict = {}
-        
+
         if info_str == '.':
             # VRT is required for SNP submission rows.
             self.error_handler.create_error(
@@ -1041,10 +1089,10 @@ class dbSNPVCFParser:
                 field_name="INFO"
             )
             return info_dict
-        
+
         # Parse semicolon-separated key/value pairs.
         pairs = info_str.split(';')
-        
+
         for pair in pairs:
             if not pair.strip():
                 continue
@@ -1052,12 +1100,14 @@ class dbSNPVCFParser:
                 key, value = pair.split('=', 1)
                 self._warn_if_undefined_info_tag(key, line_number, line)
                 self._validate_target_info_value(key, value, line_number)
+                if key == 'AF':
+                    self._validate_info_allele_frequency(value, line_number)
                 info_dict[key] = self._convert_info_value(key, value, line_number)
             else:
                 # Flag-style tag without an explicit value.
                 self._warn_if_undefined_info_tag(pair, line_number, line)
                 info_dict[pair] = True
-        
+
         # Validate the required VRT tag.
         if 'VRT' not in info_dict:
             self.error_handler.create_error(
@@ -1076,7 +1126,7 @@ class dbSNPVCFParser:
                     actual_value=str(vrt_value),
                     expected_value="integer in range 1-8"
             )
-        
+
         return info_dict
 
     def _warn_if_undefined_info_tag(self, key: str, line_number: int, line: Optional[str]) -> None:
@@ -1112,17 +1162,39 @@ class dbSNPVCFParser:
                 actual_value=value,
                 expected_value=f"value matching /{pattern}/"
             )
-    
+
+    def _validate_info_allele_frequency(self, value: str, line_number: int) -> None:
+        """Validate each numeric INFO/AF value against the inclusive 0-1 range."""
+        invalid_values = []
+        for item in value.split(','):
+            if item in {'', '.'}:
+                continue
+            try:
+                frequency = float(item)
+            except ValueError:
+                continue
+            if not 0.0 <= frequency <= 1.0:
+                invalid_values.append(item)
+
+        if invalid_values:
+            self.error_handler.create_error(
+                ErrorCode.INVALID_ALLELE_FREQUENCY,
+                line_number=line_number,
+                field_name='AF',
+                actual_value=','.join(invalid_values),
+                expected_value='numeric value in range 0-1'
+            )
+
     def _convert_info_value(self, key: str, value: str, line_number: int) -> Any:
         """Convert INFO values according to their declared or known type."""
         # Keep missing values unchanged.
         if value == '.' or value == '':
             return value
-        
+
         # Convert according to the declared INFO tag type.
         if key in self.header.info_tags:
             tag_def = self.header.info_tags[key]
-            
+
             if tag_def.type == 'Integer':
                 try:
                     # Handle comma-separated values for variable-length tags.
@@ -1156,7 +1228,7 @@ class dbSNPVCFParser:
                 return value
             elif tag_def.type == 'Flag':
                 return True
-        
+
         # Try common numeric INFO tags even when the header definition is missing.
         if key in ['VRT', 'NIO', 'SAO', 'SSR', 'AC', 'AN']:
             try:
@@ -1203,30 +1275,30 @@ class dbSNPVCFParser:
 
         # Treat undefined tags as strings.
         return value
-    
+
     def _parse_format_and_population_data(
         self, fields: List[str], line_number: int, line: Optional[str] = None
     ) -> Tuple[Dict[str, Any], Dict[str, Dict[str, Any]]]:
         """Parse FORMAT and population data."""
         format_data = {}
         population_data = {}
-        
+
         if not fields:
             return format_data, population_data
-        
+
         # FORMAT field, stored in the first extra column.
         format_str = fields[0]
         format_keys = format_str.split(':') if format_str else []
         for format_key in format_keys:
             self._warn_if_undefined_format_tag(format_key, line_number, line)
-        
+
         # Population data fields.
         population_fields = fields[1:] if len(fields) > 1 else []
-        
+
         # Check population ID count against data column count.
         expected_pop_count = len(self.header.population_ids)
         actual_pop_count = len(population_fields)
-        
+
         if expected_pop_count != actual_pop_count:
             self.error_handler.create_error(
                 ErrorCode.POPULATION_ID_MISMATCH,
@@ -1238,7 +1310,7 @@ class dbSNPVCFParser:
                     "format_keys": format_keys
                 }
             )
-        
+
         # Parse data for each population.
         for i, pop_field in enumerate(population_fields):
             if i < len(self.header.population_ids):
@@ -1253,7 +1325,7 @@ class dbSNPVCFParser:
                     line_number=line_number,
                     additional_info={"column_index": i}
                 )
-        
+
         return format_data, population_data
 
     def _warn_if_undefined_format_tag(self, key: str, line_number: int, line: Optional[str]) -> None:
@@ -1270,19 +1342,19 @@ class dbSNPVCFParser:
             expected_value="FORMAT tag definition in header",
             actual_value=f"{key} used in data row"
         )
-    
+
     def _parse_population_field(
         self, pop_field: str, format_keys: List[str], line_number: int, pop_id: str
     ) -> Dict[str, Any]:
         """Parse one population field."""
         pop_data = {}
-        
+
         if pop_field == '.':
             return pop_data
-        
+
         # Colon-separated FORMAT values.
         values = pop_field.split(':')
-        
+
         # Check that FORMAT keys and values have matching counts.
         if len(values) != len(format_keys):
             self.error_handler.create_error(
@@ -1293,13 +1365,13 @@ class dbSNPVCFParser:
                 actual_value=f"{len(values)} values",
                 additional_info={"format_keys": format_keys, "values": values}
             )
-        
+
         for i, value in enumerate(values):
             if i < len(format_keys):
                 key = format_keys[i]
                 self._validate_target_format_value(key, value, line_number, pop_id)
                 pop_data[key] = self._convert_format_value(key, value, line_number, pop_id)
-        
+
         # Validate allele frequency.
         if 'FRQ' in pop_data:
             frq_value = pop_data['FRQ']
@@ -1322,7 +1394,7 @@ class dbSNPVCFParser:
                             actual_value=str(frq),
                             expected_value="0-1 range"
                         )
-        
+
         return pop_data
 
     def _validate_target_format_value(self, key: str, value: str, line_number: int, pop_id: str) -> None:
@@ -1339,14 +1411,14 @@ class dbSNPVCFParser:
                 actual_value=value,
                 expected_value=f"value matching /{pattern}/"
             )
-    
+
     def _convert_format_value(
         self, key: str, value: str, line_number: int, pop_id: str
     ) -> Any:
         """Convert a FORMAT value according to its declared type."""
         if key in self.header.format_tags:
             tag_def = self.header.format_tags[key]
-            
+
             if tag_def.type == 'Integer':
                 try:
                     return int(value)
@@ -1376,10 +1448,10 @@ class dbSNPVCFParser:
                     return value
             elif tag_def.type == 'String':
                 return value
-        
+
         # Treat undefined tags as strings.
         return value
-    
+
     def _validate_parsed_data(self) -> None:
         """Validate parsed data as a whole."""
         # Check whether every data row contains VRT.
@@ -1387,11 +1459,12 @@ class dbSNPVCFParser:
             if 'VRT' not in row.info:
                 # The row-level parser may already have recorded an error.
                 pass
-        
+
         # Check for population IDs without population data.
-        if self.header.population_ids and not any(
+        has_population_data = self._has_population_data or any(
             row.population_data for row in self.data_rows
-        ):
+        )
+        if self.header.population_ids and not has_population_data:
             self.error_handler.create_error(
                 ErrorCode.MISSING_POPULATION_DATA,
                 additional_info={
@@ -1399,59 +1472,3 @@ class dbSNPVCFParser:
                     "message": "Population ID is defined but no data present"
                 }
             )
-    
-    def get_summary(self) -> Dict[str, Any]:
-        """Return summary of parsed data"""
-        summary = {
-            'header_metadata': {
-                'fileformat': self.header.metadata.fileformat,
-                'filedate': self.header.metadata.filedate,
-                'handle': self.header.metadata.handle,
-                'batch': self.header.metadata.batch,
-                'bioproject_id': self.header.metadata.bioproject_id,
-                'biosample_id': self.header.metadata.biosample_id,
-                'reference': self.header.metadata.reference
-            },
-            'info_tags': {tag_id: tag_def.description for tag_id, tag_def in self.header.info_tags.items()},
-            'format_tags': {tag_id: tag_def.description for tag_id, tag_def in self.header.format_tags.items()},
-            'population_ids': self.header.population_ids,
-            'column_header': self.header.column_header,
-            'total_variants': len(self.data_rows),
-            'variation_types': defaultdict(int),
-            'chromosomes': set(),
-            'info_tag_usage': defaultdict(int)
-        }
-        
-        # Variation type statistics.
-        for row in self.data_rows:
-            if 'VRT' in row.info:
-                vrt = row.info['VRT']
-                summary['variation_types'][vrt] += 1
-            
-            summary['chromosomes'].add(row.chrom)
-            
-            # INFO tag usage statistics.
-            for key in row.info.keys():
-                summary['info_tag_usage'][key] += 1
-        
-        summary['chromosomes'] = sorted(list(summary['chromosomes']))
-        
-        return summary
-
-
-def main():
-    """Test main function"""
-    parser = dbSNPVCFParser()
-    
-    # Uncomment to parse a test VCF file:
-    # parser.parse_file('test.vcf')
-    # summary = parser.get_summary()
-    # print("Parsing summary:")
-    # for key, value in summary.items():
-    #     print(f"{key}: {value}")
-    
-    print("dbSNP VCF parser is ready.")
-
-
-if __name__ == "__main__":
-    main()
