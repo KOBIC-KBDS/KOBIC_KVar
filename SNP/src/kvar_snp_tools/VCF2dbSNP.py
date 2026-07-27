@@ -75,10 +75,10 @@ def is_dbsnp_output_info_id(info_id: str) -> bool:
 def default_error_report_path(output_file_path: str) -> str:
     """Return the default plain-text error report path for a VCF output path."""
     if output_file_path.endswith('.vcf.gz'):
-        return output_file_path[:-len('.vcf.gz')] + '_errors.txt'
+        return output_file_path[:-len('.vcf.gz')] + '.errors.txt'
     if output_file_path.endswith('.vcf'):
-        return output_file_path[:-len('.vcf')] + '_errors.txt'
-    return output_file_path + '_errors.txt'
+        return output_file_path[:-len('.vcf')] + '.errors.txt'
+    return output_file_path + '.errors.txt'
 
 # Support relative imports.
 if __name__ == "__main__":
@@ -109,19 +109,13 @@ class VCF2dbSNPConverter:
         self,
         vcf_file_path: str,
         output_file_path: str,
-        metadata_file_path: Optional[str] = None,
+        metadata_file_path: str,
         error_report_path: Optional[str] = None
     ) -> None:
         """Convert a VCF file to dbSNP VCF format."""
-        # Parse metadata file.
-        if metadata_file_path:
-            try:
-                metadata_validator = MetadataValidator(self.error_handler)
-                self.metadata_info = metadata_validator.parse_metadata_file(metadata_file_path)
-                print(f"Metadata file loaded: {metadata_file_path}")
-            except Exception as e:
-                print(f"Warning: Error parsing metadata file: {e}")
-                self.metadata_info = None
+        metadata_validator = MetadataValidator(self.error_handler)
+        self.metadata_info = metadata_validator.parse_metadata_file(metadata_file_path)
+        print(f"Metadata file loaded: {metadata_file_path}")
 
         row_spool = None
         try:
@@ -167,7 +161,7 @@ class VCF2dbSNPConverter:
             vcf_file_path=vcf_file_path,
             output_tsv_path=output_file_path
         )
-        print(f"Error report: {error_report_path}")
+        print(f"Validation report: {error_report_path}")
 
         print(f"Conversion complete: {vcf_file_path} -> {output_file_path}")
         print(f"Total {self._parsed_row_count} variants converted")
@@ -330,10 +324,6 @@ class VCF2dbSNPConverter:
             self.parser.header.metadata.handle = value
         elif key == 'batch':
             self.parser.header.metadata.batch = value
-        elif key == 'bioproject_id':
-            self.parser.header.metadata.bioproject_id = value
-        elif key == 'biosample_id':
-            self.parser.header.metadata.biosample_id = value
         elif key == 'reference':
             self.parser.header.metadata.reference = value
         elif key == 'population_id':
@@ -432,6 +422,13 @@ class VCF2dbSNPConverter:
         fields = line.split('\t')
 
         if len(fields) < 8:
+            self.error_handler.create_error(
+                ErrorCode.INSUFFICIENT_FIELDS,
+                line_number=line_number,
+                line_content=line,
+                expected_value="at least 8",
+                actual_value=f"{len(fields)}"
+            )
             return None
 
         # Basic fields
@@ -1015,38 +1012,6 @@ class VCF2dbSNPConverter:
                     }
                 )
 
-        vcf_bioproject_id = self.parser.header.metadata.bioproject_id
-        metadata_bioproject_id = self.metadata_info.bioproject_id
-
-        if metadata_bioproject_id:
-            if not vcf_bioproject_id or not vcf_bioproject_id.strip():
-                self.parser.header.metadata.bioproject_id = metadata_bioproject_id
-                print(f"[Fixed] VCF had no bioproject_id; set to metadata value ({metadata_bioproject_id}).")
-                self.error_handler.create_error(
-                    ErrorCode.METADATA_VALUE_FILLED,
-                    field_name="bioproject_id",
-                    expected_value=metadata_bioproject_id,
-                    actual_value="Not in VCF file",
-                    additional_info={
-                        "action": "Updated from metadata file",
-                        "source": "metadata file"
-                    }
-                )
-            elif vcf_bioproject_id.strip() != metadata_bioproject_id:
-                old_value = vcf_bioproject_id
-                self.parser.header.metadata.bioproject_id = metadata_bioproject_id
-                print(f"[Fixed] VCF bioproject_id ({old_value}) differed from metadata ({metadata_bioproject_id}); updated from metadata.")
-                self.error_handler.create_error(
-                    ErrorCode.METADATA_VALUE_CORRECTED,
-                    field_name="bioproject_id",
-                    expected_value=metadata_bioproject_id,
-                    actual_value=old_value,
-                    additional_info={
-                        "action": "Updated from metadata file",
-                        "source": "metadata file"
-                    }
-                )
-
         vcf_reference = self.parser.header.metadata.reference
         metadata_reference = self.metadata_info.reference
         vcf_ref_stripped = (vcf_reference or "").strip()
@@ -1087,9 +1052,38 @@ class VCF2dbSNPConverter:
             )
 
     def _write_dbsnp_vcf(self, output_file_path: str, row_spool: Optional[TextIO] = None) -> None:
-        """Write a dbSNP-formatted VCF file with optional gzip compression."""
-        output_opener = gzip.open if output_file_path.endswith('.gz') else open
-        with output_opener(output_file_path, 'wt', encoding='utf-8') as f:
+        """Atomically publish a dbSNP-formatted VCF after writing it completely."""
+        output_dir = os.path.dirname(os.path.abspath(output_file_path)) or "."
+        output_base = os.path.basename(output_file_path)
+        fd, temp_path = tempfile.mkstemp(
+            prefix=f".{output_base}.",
+            suffix=".tmp",
+            dir=output_dir,
+        )
+        os.close(fd)
+
+        try:
+            self._write_dbsnp_vcf_to_path(
+                temp_path,
+                gzip_output=output_file_path.endswith('.gz'),
+                row_spool=row_spool,
+            )
+            os.replace(temp_path, output_file_path)
+        except Exception:
+            if os.path.exists(temp_path):
+                os.unlink(temp_path)
+            raise
+
+    def _write_dbsnp_vcf_to_path(
+        self,
+        path: str,
+        *,
+        gzip_output: bool,
+        row_spool: Optional[TextIO] = None,
+    ) -> None:
+        """Write a complete dbSNP VCF to a staging path."""
+        output_opener = gzip.open if gzip_output else open
+        with output_opener(path, 'wt', encoding='utf-8') as f:
             self._write_metadata(f)
             self._write_info_tag_definitions(f)
             self._write_format_tag_definitions(f)
@@ -1123,20 +1117,6 @@ class VCF2dbSNPConverter:
             batch = self.metadata_info.experiment_id
         if batch:
             f.write(f"##batch={batch}\n")
-
-        # bioproject_id
-        bioproject_id = self.parser.header.metadata.bioproject_id
-        if not bioproject_id and self.metadata_info:
-            bioproject_id = self.metadata_info.bioproject_id
-        if bioproject_id:
-            f.write(f"##bioproject_id={bioproject_id}\n")
-
-        # biosample_id
-        if self.parser.header.metadata.biosample_id:
-            f.write(f"##biosample_id={self.parser.header.metadata.biosample_id}\n")
-        elif self.metadata_info and self.metadata_info.biosample_id:
-            biosample_id = ','.join(self.metadata_info.biosample_id)
-            f.write(f"##biosample_id={biosample_id}\n")
 
         # reference
         reference = self.parser.header.metadata.reference

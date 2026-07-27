@@ -25,9 +25,7 @@ class VCFHeaderMetadata:
     filedate: Optional[str] = None
     handle: Optional[str] = None
     batch: Optional[str] = None
-    bioproject_id: Optional[str] = None
-    biosample_id: Optional[str] = None
-    sampleset_id: Optional[str] = None  # Alternative to biosample_id
+    sampleset_id: Optional[str] = None
     reference: Optional[str] = None
 
 
@@ -103,8 +101,6 @@ class dbSNPVCFParser:
             'filedate',
             'handle',
             'batch',
-            'bioproject_id',
-            'biosample_id',
             'sampleset_id',
             'reference',
         }
@@ -267,6 +263,40 @@ class dbSNPVCFParser:
                 ErrorCode.MISSING_COLUMN_HEADER
             )
 
+    def validate_single_population_header(self) -> bool:
+        """Require one population_id and one matching population column."""
+        population_ids = self.header.population_ids
+        if len(population_ids) != 1 or not population_ids[0].strip():
+            error_code = (
+                ErrorCode.MISSING_POPULATION_ID
+                if not population_ids
+                else ErrorCode.POPULATION_ID_MISMATCH
+            )
+            self.error_handler.create_error(
+                error_code,
+                field_name="population_id",
+                expected_value="exactly one non-empty ##population_id entry",
+                actual_value=f"{len(population_ids)} entries",
+            )
+            return False
+
+        expected_columns = ["FORMAT", population_ids[0]]
+        actual_columns = self.header.column_header[8:]
+        if actual_columns != expected_columns:
+            self.error_handler.create_error(
+                ErrorCode.POPULATION_ID_MISMATCH,
+                field_name="#CHROM population columns",
+                expected_value="\t".join(expected_columns),
+                actual_value=(
+                    "\t".join(actual_columns)
+                    if actual_columns
+                    else "No FORMAT/population columns"
+                ),
+            )
+            return False
+
+        return True
+
     def _parse_metadata_line(self, line: str, line_number: int) -> None:
         """Parse metadata line"""
         # Parse ##key=value format
@@ -298,16 +328,6 @@ class dbSNPVCFParser:
                 if not self._validate_singleton_metadata_tag(key, line, line_number):
                     return
                 self.header.metadata.batch = value
-            elif key == 'bioproject_id':
-                if not self._validate_singleton_metadata_tag(key, line, line_number):
-                    return
-                self.header.metadata.bioproject_id = value
-            elif key == 'biosample_id':
-                if not self._validate_singleton_metadata_tag(key, line, line_number):
-                    return
-                # Also store as sampleset_id (compatibility)
-                self.header.metadata.biosample_id = value
-                self.header.metadata.sampleset_id = value
             elif key == 'sampleset_id':
                 if not self._validate_singleton_metadata_tag(key, line, line_number):
                     return

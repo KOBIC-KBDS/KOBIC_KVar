@@ -26,3 +26,9 @@ htmlcov/
 output/
 outputs/
 tmp/
+
+# Privacy-safe synthetic examples are intentionally versioned.
+!examples/
+!examples/toy.human.GRCh38.fa
+!examples/toy.human.GRCh38.fa.fai
+!examples/toy.human.sv.vcf

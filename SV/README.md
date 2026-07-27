@@ -4,18 +4,18 @@
 
 The **SV** module of KVar-Toolkit validates structural variation VCF input and
 produces a KVar-formatted `Variant_Call.tsv` for public variant submission. It
-assigns KVar accession-style call IDs, preserves submitted IDs for traceability,
-and reports validation issues in a separate error report.
+preserves submitted IDs for traceability and reports validation issues in a
+single validation report. Accessions are not assigned during submission conversion.
 
 Run the commands below from this `SV/` directory.
 
 ## Key Features
 
 - **SV VCF to Variant Call TSV conversion**: Convert a structural variation VCF into `Variant_Call.tsv`.
-- **Reference-based validation**: Validate chromosome names, coordinates, and REF alleles against an indexed reference FASTA.
+- **Optional reference-based validation**: Validate chromosome names, coordinates, and REF alleles when an indexed reference FASTA is supplied.
 - **SV type classification**: Classify deletion, insertion, duplication, inversion, copy number variation, mobile element insertion/deletion, BND, and complex events.
 - **BND/MATEID handling**: Validate reciprocal IDs, target coordinates, and VCF breakend orientations before collapsing two translocation rows into one call.
-- **Call accession assignment**: Rewrite call IDs as `kssvN` while retaining submitted IDs in the output.
+- **Submission ID preservation**: Keep submitted VCF IDs in the Call TSV; KVar accessions are assigned only after administrator QC.
 
 ### Prerequisites
 
@@ -27,24 +27,20 @@ Convert an SV VCF into a KVar `Variant_Call.tsv`:
 
 ```bash
 python src/kvar_sv_tools/vcf_to_kvar_tsv.py \
-  -v input.sv.vcf.gz \
-  -f GRCh38.fa \
-  -m metadata.txt \
-  -t Variant_Call.tsv \
-  -e validation_report.txt \
-  -c 1
+  -v examples/toy.human.sv.vcf
 ```
 
-The long-option form is equivalent:
+This creates `examples/toy.human.sv.Variant_Call.tsv` and
+`examples/toy.human.sv.Variant_Call.errors.txt`.
+
+To enable reference validation, provide the synthetic indexed FASTA:
 
 ```bash
 python src/kvar_sv_tools/vcf_to_kvar_tsv.py \
-  --vcf input.sv.vcf.gz \
-  --reference-fasta GRCh38.fa \
-  --metadata metadata.txt \
+  --vcf examples/toy.human.sv.vcf \
+  --reference examples/toy.human.GRCh38.fa \
   --call-tsv Variant_Call.tsv \
-  --error-report validation_report.txt \
-  --call-accession-start 1
+  --error-report validation_report.txt
 ```
 
 ## Common Options
@@ -52,28 +48,28 @@ python src/kvar_sv_tools/vcf_to_kvar_tsv.py \
 | Option | Description |
 | --- | --- |
 | `-v`, `--vcf` | Input SV VCF path (`.gz` supported, **required**) |
-| `-f`, `-r`, `--reference-fasta` | Reference FASTA path for coordinate and REF validation (`.fai` required, **required**) |
-| `-m`, `--metadata` | Metadata file path (**required**) |
-| `-t`, `--call-tsv` | Output `Variant_Call.tsv` path (**required**) |
-| `-e`, `--error-report` | Validation report path (**required**) |
-| `-c`, `--call-accession-start` | Starting number for Variant Call accessions, written as `kssvN` (**required**) |
-| `--sanitize-error-report` | Redact absolute paths and raw row content from the validation report |
+| `-r`, `--reference` | Optional reference FASTA for coordinate and REF validation (`.fai` required when used) |
+| `-t`, `--call-tsv` | Optional output Call TSV path; must end with `.tsv` |
+| `-e`, `--error-report` | Optional validation report path; defaults to the Call TSV basename with `.errors.txt` |
 
-## Metadata Format
+If `--call-tsv` is omitted, `sample.vcf` or `sample.vcf.gz` produces
+`sample.Variant_Call.tsv`.
+Each run writes one validation report. If `--error-report` is omitted, an output
+such as `sample.Variant_Call.tsv` produces `sample.Variant_Call.errors.txt`.
+Generated Call TSV and report paths must differ from the input VCF and optional
+reference FASTA path, and from each other.
 
-Metadata files use VCF-style lines:
+## Input Scope
 
-```text
-##Experiment_id=EXP001
-##reference=GRCh38
-##SampleSet_id=POP1
-##organism_taxid=9606 (Homo sapiens)
-```
+The SV converter accepts an SV VCF and can optionally use an indexed reference
+FASTA. It does not accept a separate metadata file, and it does not require or
+validate `SampleSet`, `Experiment`, or the VCF `##reference` header. Chromosome,
+coordinate, and REF allele validation runs only when a FASTA is supplied through
+`--reference`.
 
-The `##reference` value should match the input VCF `##reference` header. The
-metadata values are also used as fallback context when `SAMPLESET` or
-`EXPERIMENT` are not present in every VCF INFO field. The optional
-`##organism_taxid` value is written verbatim to the output TSV headers.
+The input VCF must already contain the records selected for submission. The
+converter does not remove records based on the VCF `FILTER` column. It also does
+not calculate AC, AN, or AF from sample `FORMAT` genotype fields.
 
 ## Outputs
 
@@ -84,11 +80,10 @@ The converter writes:
 
 Original submitted VCF row IDs are retained in `Submitted_Variant_Call_IDs`.
 BND mate rows that collapse into one translocation call are mapped to the same
-normalized call accession.
+submission call ID. The converter does not accept an accession-start option and
+does not create `kssvN` identifiers; those are assigned only after QC.
 Call TSV column names use underscore-separated headers, such as
 `Variant_Call_ID`, `Variant_Call_Type`, and `Outer_Start`.
-When the metadata file provides `##organism_taxid`, the call TSV carries an
-`##organism_taxid=...` header line after the `##Variant_Call` label line.
 
 `Variant_Call.tsv` also contains `HGVSG` after `Phenotype`. The converter derives
 it for deletion/mobile-element deletion/copy-number loss (`del`),
@@ -126,13 +121,12 @@ preserving the validation report.
 ```text
 SV/
 ├── README.md            # This file
+├── examples/            # Privacy-safe synthetic GRCh38-style VCF and FASTA
 ├── src/kvar_sv_tools/
 │   ├── vcf_to_kvar_tsv.py            # Public CLI entry point
 │   ├── KVar2TSV.py                   # VCF validation and Variant Call TSV writing
 │   ├── VCF_parser.py                 # VCF parser and reference checks
 │   ├── sv_type_ontology.py           # SV type constants and mappings
-│   ├── metadata_validator.py         # Metadata validation against VCF headers
-│   ├── metadata_parser.py            # Metadata file parser (organism_taxid, sampleset, experiment)
 │   └── error_handler.py              # Error codes and validation report
 └── tests/
     └── test_public_cli_smoke.py
@@ -140,9 +134,10 @@ SV/
 
 ## Testing
 
-The smoke test creates synthetic temporary input files at runtime. No real VCF,
-reference FASTA, dbVar/DDBJ downloads, or Manta result files are checked into
-this public subset.
+The module includes a small synthetic human example under `examples/`. It uses
+GRCh38 chromosome/accession names but contains no real person, sample, genotype,
+or cohort data. No real VCF, full reference FASTA, dbVar/DDBJ download, or Manta
+result file is checked into this public subset.
 
 ```bash
 python tests/test_public_cli_smoke.py
@@ -151,5 +146,5 @@ python tests/test_public_cli_smoke.py
 ## Notes
 
 - This public CLI is intended for VCF-to-`Variant_Call.tsv` conversion only.
-- Reference FASTA validation requires an existing `.fai` index.
+- Reference validation is optional; when used, the FASTA requires an existing `.fai` index.
 - This public subset does not include private datasets, generated full-scale outputs, or internal pipeline reports.

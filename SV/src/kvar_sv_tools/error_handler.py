@@ -60,9 +60,7 @@ class ErrorCode(Enum):
     DUPLICATE_COLUMN_HEADER = (2005, ErrorSeverity.ERROR, ErrorCategory.HEADER_ERROR, "Column header is duplicated")
 
     # Metadata-related (2100s)
-    MISSING_REQUIRED_METADATA = (2101, ErrorSeverity.ERROR, ErrorCategory.METADATA_ERROR, "Required metadata is missing")
     INVALID_METADATA_FORMAT = (2102, ErrorSeverity.ERROR, ErrorCategory.METADATA_ERROR, "Metadata format is invalid")
-    METADATA_MISMATCH = (2103, ErrorSeverity.ERROR, ErrorCategory.METADATA_ERROR, "Metadata file and VCF metadata do not match")
 
     # INFO tag (2200s)
     INFO_TAG_PARSE_ERROR = (2201, ErrorSeverity.ERROR, ErrorCategory.HEADER_ERROR, "INFO tag definition parse error")
@@ -80,8 +78,6 @@ class ErrorCode(Enum):
     MISSING_SVTYPE_TAG = (2210, ErrorSeverity.ERROR, ErrorCategory.VALIDATION_ERROR, "Required SVTYPE tag is missing")
     MISSING_END_TAG = (2211, ErrorSeverity.ERROR, ErrorCategory.VALIDATION_ERROR, "Required END tag is missing")
     MISSING_SVLEN_TAG = (2212, ErrorSeverity.WARNING, ErrorCategory.VALIDATION_ERROR, "SVLEN tag is missing; derived length fields may be blank")
-    MISSING_SAMPLESET_TAG = (2213, ErrorSeverity.ERROR, ErrorCategory.VALIDATION_ERROR, "Required SAMPLESET tag is missing")
-    MISSING_EXPERIMENT_TAG = (2214, ErrorSeverity.ERROR, ErrorCategory.VALIDATION_ERROR, "Required EXPERIMENT tag is missing")
     INVALID_SVTYPE_VALUE = (2215, ErrorSeverity.ERROR, ErrorCategory.VALIDATION_ERROR, "SVTYPE value is invalid (must be one of DEL, INS, DUP, INV, CNV, BND)")
     INVALID_END_VALUE = (2216, ErrorSeverity.ERROR, ErrorCategory.VALIDATION_ERROR, "END value is invalid (must be >= POS)")
 
@@ -126,7 +122,6 @@ class ErrorCode(Enum):
     POSITION_OUT_OF_RANGE = (6003, ErrorSeverity.ERROR, ErrorCategory.VALIDATION_ERROR, "Position is out of reference genome range")
     FASTA_INDEX_ERROR = (6004, ErrorSeverity.CRITICAL, ErrorCategory.FILE_ERROR, "FASTA index file create/read error")
     FASTA_READ_ERROR = (6005, ErrorSeverity.CRITICAL, ErrorCategory.FILE_ERROR, "FASTA file read error")
-    REF_CHECK_SKIPPED = (6006, ErrorSeverity.WARNING, ErrorCategory.VALIDATION_ERROR, "Reference FASTA validation was skipped", ErrorAction.SKIP_AND_CONTINUE)
 
     # DDBJ-style VCF header validation (6100s)
     FILEFORMAT_NOT_FIRST = (6101, ErrorSeverity.ERROR, ErrorCategory.HEADER_ERROR, "##fileformat must be the first non-empty VCF line")
@@ -169,8 +164,8 @@ class ParseError:
     additional_info: Dict[str, Any] = field(default_factory=dict)
     timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
 
-    def format(self, include_line_content: bool = True) -> str:
-        """Represent error as string, optionally omitting raw input content."""
+    def format(self) -> str:
+        """Represent error as a detailed string."""
         parts = [
             f"[{self.error_code.code}] {self.error_code.severity.value}",
             f"action: {self.error_code.action.value}",
@@ -192,7 +187,7 @@ class ParseError:
         if self.actual_value:
             parts.append(f"actual: {self.actual_value}")
 
-        if include_line_content and self.line_content:
+        if self.line_content:
             parts.append(f"content: {self.line_content[:100]}")
 
         return " | ".join(parts)
@@ -300,9 +295,6 @@ class ErrorHandler:
         vcf_file_path: Optional[str] = None,
         output_tsv_path: Optional[str] = None,
         tsv_file_path: Optional[str] = None,
-        sanitize_paths: bool = False,
-        include_line_content: bool = True,
-        include_additional_info: bool = True
     ) -> None:
         """Raise if any collected message has a blocking action."""
         if not self.has_blocking_errors():
@@ -314,9 +306,6 @@ class ErrorHandler:
                 output_file=output_file,
                 vcf_file_path=vcf_file_path,
                 output_tsv_path=report_tsv_path,
-                sanitize_paths=sanitize_paths,
-                include_line_content=include_line_content,
-                include_additional_info=include_additional_info
             )
 
         summary = self.get_summary()
@@ -358,32 +347,10 @@ class ErrorHandler:
         }
 
     @staticmethod
-    def _display_path(path: Optional[str], sanitize_paths: bool) -> str:
+    def _display_path(path: Optional[str]) -> str:
         if not path:
             return "(not specified)"
-        if sanitize_paths:
-            return os.path.join("(redacted)", os.path.basename(path))
         return os.path.abspath(path)
-
-    @classmethod
-    def _display_additional_info(cls, key: str, value: Any, sanitize_paths: bool) -> Any:
-        if not sanitize_paths:
-            return value
-
-        key_lower = key.lower()
-        if key_lower.endswith("path") or key_lower in {"path", "file", "filename"}:
-            return cls._display_path(str(value), sanitize_paths=True)
-        if isinstance(value, (list, tuple)):
-            return [
-                cls._display_additional_info(key, item, sanitize_paths)
-                for item in value
-            ]
-        if isinstance(value, dict):
-            return {
-                nested_key: cls._display_additional_info(str(nested_key), nested_value, sanitize_paths)
-                for nested_key, nested_value in value.items()
-            }
-        return value
 
     def generate_report(
         self,
@@ -391,9 +358,6 @@ class ErrorHandler:
         vcf_file_path: Optional[str] = None,
         tsv_file_path: Optional[str] = None,
         output_tsv_path: Optional[str] = None,
-        sanitize_paths: bool = False,
-        include_line_content: bool = True,
-        include_additional_info: bool = True,
         report_display_path: Optional[str] = None
     ) -> str:
         """에러 리포트 생성"""
@@ -402,45 +366,56 @@ class ErrorHandler:
 
         report_lines = []
         report_lines.append("=" * 80)
-        report_lines.append("KVar SV VCF Parsing Error Report")
+        report_lines.append("KVar SV Validation Report")
         report_lines.append("=" * 80)
 
-        path_label_suffix = "" if sanitize_paths else " absolute path"
         report_lines.append(
-            f"Input VCF file{path_label_suffix}: {self._display_path(vcf_file_path, sanitize_paths)}"
+            f"Input VCF file absolute path: {self._display_path(vcf_file_path)}"
         )
         report_lines.append(
-            f"Output TSV file{path_label_suffix}: {self._display_path(tsv_file_path, sanitize_paths)}"
+            f"Output file absolute path: {self._display_path(tsv_file_path)}"
         )
         report_lines.append(
-            f"Error report{path_label_suffix}: "
-            f"{self._display_path(report_display_path or output_file, sanitize_paths)}"
+            "Validation report absolute path: "
+            f"{self._display_path(report_display_path or output_file)}"
         )
 
         report_lines.append(f"Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         report_lines.append("")
 
         summary = self.get_summary()
-        report_lines.append("=== Error Summary ===")
-        report_lines.append(f"Total errors: {summary['total_errors']}")
+        report_lines.append("=== Validation Summary ===")
+        report_lines.append(f"Total issues: {summary['total_errors']}")
         report_lines.append(f"  Critical: {summary['critical_count']}")
         report_lines.append(f"  Error: {summary['error_count']}")
         report_lines.append(f"  Warning: {summary['warning_count']}")
         report_lines.append(f"  Info: {summary['info_count']}")
+        if summary['total_errors'] == 0:
+            report_lines.append("No issues.")
         report_lines.append(f"  Blocking: {summary['blocking_count']}")
         report_lines.append("")
 
-        report_lines.append("=== Actions ===")
-        for action, count in summary['errors_by_action'].items():
-            if count > 0:
+        nonzero_actions = {
+            action: count
+            for action, count in summary['errors_by_action'].items()
+            if count > 0
+        }
+        if nonzero_actions:
+            report_lines.append("=== Actions ===")
+            for action, count in nonzero_actions.items():
                 report_lines.append(f"  {action}: {count}")
-        report_lines.append("")
+            report_lines.append("")
 
-        report_lines.append("=== Errors by Category ===")
-        for category, count in summary['errors_by_category'].items():
-            if count > 0:
+        nonzero_categories = {
+            category: count
+            for category, count in summary['errors_by_category'].items()
+            if count > 0
+        }
+        if nonzero_categories:
+            report_lines.append("=== Errors by Category ===")
+            for category, count in nonzero_categories.items():
                 report_lines.append(f"  {category}: {count}")
-        report_lines.append("")
+            report_lines.append("")
 
         if summary['error_counts_by_code']:
             report_lines.append("=== Statistics by Error Code ===")
@@ -457,11 +432,10 @@ class ErrorHandler:
                     report_lines.append(f"\n[{severity.value}] ({len(errors)} items)")
                     report_lines.append("-" * 80)
                     for i, error in enumerate(errors, 1):
-                        report_lines.append(f"{i}. {error.format(include_line_content=include_line_content)}")
-                        if include_additional_info and error.additional_info:
+                        report_lines.append(f"{i}. {error.format()}")
+                        if error.additional_info:
                             for key, value in error.additional_info.items():
-                                display_value = self._display_additional_info(key, value, sanitize_paths)
-                                report_lines.append(f"   - {key}: {display_value}")
+                                report_lines.append(f"   - {key}: {value}")
 
         report_text = "\n".join(report_lines)
 
@@ -475,7 +449,6 @@ class ErrorHandler:
     def generate_json_report(
         self,
         output_file: Optional[str] = None,
-        include_additional_info: bool = True
     ) -> Dict[str, Any]:
         """Generate error report in JSON format"""
         report = {
@@ -483,10 +456,6 @@ class ErrorHandler:
             "summary": self.get_summary(),
             "errors": [error.to_dict() for error in self.errors]
         }
-        if not include_additional_info:
-            for error in report["errors"]:
-                error["additional_info"] = {}
-
         if output_file:
             with open(output_file, 'w', encoding='utf-8') as f:
                 json.dump(report, f, ensure_ascii=False, indent=2)
@@ -505,7 +474,7 @@ class ErrorHandler:
         """Print error summary to console"""
         summary = self.get_summary()
         print("\n=== Parsing Error Summary ===")
-        print(f"Total errors: {summary['total_errors']}")
+        print(f"Total issues: {summary['total_errors']}")
         print(f"  Critical: {summary['critical_count']}")
         print(f"  Error: {summary['error_count']}")
         print(f"  Warning: {summary['warning_count']}")

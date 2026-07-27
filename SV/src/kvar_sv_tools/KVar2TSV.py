@@ -11,7 +11,6 @@ import argparse
 import gzip
 import re
 import tempfile
-from datetime import datetime
 from typing import Dict, List, Optional, Any, Tuple
 from collections import defaultdict
 
@@ -75,32 +74,11 @@ def normalize_call_field_name(field: str) -> str:
 try:
     from .VCF_parser import KVarVCFParser, VCFDataRow, SVClassifier, BreakendParser
     from .error_handler import ErrorHandler, ErrorCode
-    from .metadata_validator import MetadataValidator
-    from .metadata_parser import MetadataParser
     from .sv_type_ontology import normalize_call_type
 except ImportError:
     from VCF_parser import KVarVCFParser, VCFDataRow, SVClassifier, BreakendParser
     from error_handler import ErrorHandler, ErrorCode
-    from metadata_validator import MetadataValidator
-    from metadata_parser import MetadataParser
     from sv_type_ontology import normalize_call_type
-
-
-def _error_report_kwargs(sanitize_error_report: bool) -> Dict[str, bool]:
-    """Return report options for internal vs user-facing error reports."""
-    return {
-        "sanitize_paths": sanitize_error_report,
-        "include_line_content": not sanitize_error_report,
-        "include_additional_info": not sanitize_error_report,
-    }
-
-
-def _display_report_path(path: Optional[str], sanitize_error_report: bool) -> str:
-    if not path:
-        return "(not specified)"
-    if sanitize_error_report:
-        return os.path.join("(redacted)", os.path.basename(path))
-    return os.path.abspath(path)
 
 
 class _OutputTransaction:
@@ -386,7 +364,6 @@ class KVarTSVConverter:
     ):
         self.error_handler = error_handler or ErrorHandler()
         self.reference_fasta_path = reference_fasta_path
-        self.organism_taxid = None
         self.parser = KVarVCFParser(
             self.error_handler,
             reference_fasta_path=reference_fasta_path,
@@ -400,31 +377,8 @@ class KVarTSVConverter:
         vcf_file_path: str,
         output_file_path: str,
         error_report_path: Optional[str] = None,
-        metadata_file_path: Optional[str] = None,
-        call_accession_start: Optional[int] = None,
-        sanitize_error_report: bool = False,
     ) -> None:
-        """Main method: convert VCF to TSV"""
-        report_kwargs = _error_report_kwargs(sanitize_error_report)
-        # Parse metadata file if provided
-        metadata_validator = None
-        if metadata_file_path:
-            try:
-                metadata_validator = MetadataValidator(self.error_handler)
-                metadata_validator.parse_metadata_file(metadata_file_path)
-                print(f"Metadata file loaded: {metadata_file_path}")
-            except Exception as e:
-                print(f"Warning: Error parsing metadata file: {e}")
-            else:
-                metadata_info = metadata_validator.metadata_file_info
-                if metadata_info:
-                    self.organism_taxid = MetadataParser(metadata_file_path).organism_taxid
-                    self.parser.set_expected_metadata(
-                        sampleset_id=metadata_info.sampleset_id,
-                        experiment_id=metadata_info.experiment_id,
-                        reference=metadata_info.reference
-                    )
-
+        """Validate a submitted VCF and create an accession-free Call TSV."""
         try:
             # Parse VCF file
             self.parser.parse_file(vcf_file_path)
@@ -437,84 +391,13 @@ class KVarTSVConverter:
                         error_report_path,
                         vcf_file_path,
                         output_file_path,
-                        **report_kwargs,
                     )
                 raise
-
-        # Metadata validation
-        if metadata_validator:
-            # Extract SAMPLESET and EXPERIMENT from VCF (must be same across all rows)
-            vcf_sampleset = None
-            vcf_experiment = None
-            # Try INFO tags first
-            for row in self.parser.data_rows:
-                if 'SAMPLESET' in row.info:
-                    if vcf_sampleset is None:
-                        vcf_sampleset = row.info['SAMPLESET']
-                    elif vcf_sampleset != row.info['SAMPLESET']:
-                        self.error_handler.create_error(
-                            ErrorCode.METADATA_MISMATCH,
-                            field_name="SAMPLESET",
-                            expected_value="Same value in all rows",
-                            actual_value="Multiple values found",
-                            additional_info={"message": "SAMPLESET must be identical across all rows in VCF"}
-                        )
-
-                if 'EXPERIMENT' in row.info:
-                    if vcf_experiment is None:
-                        vcf_experiment = row.info['EXPERIMENT']
-                    elif vcf_experiment != row.info['EXPERIMENT']:
-                        self.error_handler.create_error(
-                            ErrorCode.METADATA_MISMATCH,
-                            field_name="EXPERIMENT",
-                            expected_value="Same value in all rows",
-                            actual_value="Multiple values found",
-                            additional_info={"message": "EXPERIMENT must be identical across all rows in VCF"}
-                        )
-
-            # If not in INFO, use VCF header batch/population_id (Experiment_id/SampleSet_id mapping)
-            if vcf_experiment is None and self.parser.header.metadata.batch:
-                vcf_experiment = self.parser.header.metadata.batch
-            if vcf_experiment is None and metadata_validator.metadata_file_info:
-                vcf_experiment = metadata_validator.metadata_file_info.experiment_id
-
-            if vcf_sampleset is None and self.parser.header.metadata.population_id:
-                # population_id is a list; use first value (or check all if multiple)
-                if len(self.parser.header.metadata.population_id) == 1:
-                    vcf_sampleset = self.parser.header.metadata.population_id[0]
-                elif len(self.parser.header.metadata.population_id) > 1:
-                    # Multiple values: use first and report warning
-                    vcf_sampleset = self.parser.header.metadata.population_id[0]
-                    self.error_handler.create_error(
-                        ErrorCode.METADATA_MISMATCH,
-                        field_name="SampleSet_id/population_id",
-                        expected_value="Single value",
-                        actual_value=f"Multiple values: {', '.join(self.parser.header.metadata.population_id)}",
-                        additional_info={
-                            "message": "VCF header has multiple population_id; using first.",
-                            "all_population_ids": self.parser.header.metadata.population_id
-                        }
-                    )
-            if vcf_sampleset is None and metadata_validator.metadata_file_info:
-                vcf_sampleset = metadata_validator.metadata_file_info.sampleset_id
-
-            validation_passed = metadata_validator.validate_against_vcf(
-                vcf_sampleset,
-                vcf_experiment,
-                self.parser.header.metadata.reference
-            )
-
-            if not validation_passed:
-                print("Warning: Metadata validation failed - check error report")
-            else:
-                print("Metadata validation passed")
 
         # Build ID map and BND grouping
         id_map = self._build_id_map()
         mutation_id_map = self._build_mutation_id_map(id_map)
         call_records = self._build_call_records(id_map)
-        if call_accession_start is not None:
-            self._assign_call_accessions(call_records, call_accession_start)
 
         # Block final output when CRITICAL/ERROR messages were collected.
         self.error_handler.assert_no_blocking_errors(
@@ -522,7 +405,6 @@ class KVarTSVConverter:
             output_file=error_report_path,
             vcf_file_path=vcf_file_path,
             output_tsv_path=output_file_path,
-            **report_kwargs,
         )
 
         report_has_errors = self.error_handler.has_errors()
@@ -535,34 +417,12 @@ class KVarTSVConverter:
 
                 self._write_tsv_file(staged_call_tsv, mutation_id_map, call_records)
                 if staged_error_report:
-                    if report_has_errors:
-                        self.error_handler.generate_report(
-                            staged_error_report,
-                            report_display_path=error_report_path,
-                            vcf_file_path=vcf_file_path,
-                            output_tsv_path=output_file_path,
-                            **report_kwargs,
-                        )
-                    else:
-                        with open(staged_error_report, 'w', encoding='utf-8') as f:
-                            f.write("=" * 80 + "\n")
-                            f.write("KVar SV VCF Parsing Error Report\n")
-                            f.write("=" * 80 + "\n")
-                            path_label_suffix = "" if sanitize_error_report else " absolute path"
-                            f.write(
-                                f"Input VCF{path_label_suffix}: "
-                                f"{_display_report_path(vcf_file_path, sanitize_error_report)}\n"
-                            )
-                            f.write(
-                                f"Output TSV{path_label_suffix}: "
-                                f"{_display_report_path(output_file_path, sanitize_error_report)}\n"
-                            )
-                            f.write(
-                                f"Error report{path_label_suffix}: "
-                                f"{_display_report_path(error_report_path, sanitize_error_report)}\n"
-                            )
-                            f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-                            f.write("\nNo errors.\n")
+                    self.error_handler.generate_report(
+                        staged_error_report,
+                        report_display_path=error_report_path,
+                        vcf_file_path=vcf_file_path,
+                        output_tsv_path=output_file_path,
+                    )
                 outputs.publish()
         except RuntimeError:
             raise
@@ -576,13 +436,12 @@ class KVarTSVConverter:
                     error_report_path,
                     vcf_file_path,
                     output_tsv_path=output_file_path,
-                    **report_kwargs,
                 )
             raise
 
         if error_report_path:
-            report_suffix = "" if report_has_errors else " (no errors)"
-            print(f"Error report: {error_report_path}{report_suffix}")
+            report_suffix = "" if report_has_errors else " (no issues)"
+            print(f"Validation report: {error_report_path}{report_suffix}")
 
         print(f"Conversion complete: {vcf_file_path} -> {output_file_path}")
         print(f"Total {len(call_records)} variant calls written")
@@ -846,13 +705,6 @@ class KVarTSVConverter:
 
         return call_records
 
-    def _assign_call_accessions(self, call_records: List[Dict[str, Any]], call_accession_start: int) -> None:
-        """Assign KVar call accessions to output call records."""
-        counter = call_accession_start
-        for call_record in call_records:
-            call_record["output_id"] = f"kssv{counter}"
-            counter += 1
-
     def _build_mutation_id_map(self, id_map: Dict[str, int]) -> Dict[str, Dict[str, str]]:
         """Group BNDs and assign Mutation ID"""
         mutation_id_map = {}
@@ -928,8 +780,6 @@ class KVarTSVConverter:
         with open(output_file_path, 'w', encoding='utf-8') as f:
             # Write header
             f.write("##Variant_Call\n")
-            if self.organism_taxid:
-                f.write(f"##organism_taxid={self.organism_taxid}\n")
             f.write("#" + "\t".join(CALL_TSV_HEADER) + "\n")
 
             # Write data rows

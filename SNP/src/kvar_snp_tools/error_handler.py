@@ -53,10 +53,8 @@ class ErrorCode(Enum):
     METADATA_VALUE_CORRECTED = (2105, ErrorSeverity.WARNING, ErrorCategory.METADATA_ERROR, "VCF metadata value was replaced with metadata file value")
     DUPLICATE_METADATA_TAG = (2106, ErrorSeverity.ERROR, ErrorCategory.HEADER_ERROR, "Metadata tag is duplicated")
     METADATA_NOT_PARSED = (2107, ErrorSeverity.ERROR, ErrorCategory.METADATA_ERROR, "Metadata file has not been parsed")
-    MISSING_BIOSAMPLE_ID = (2108, ErrorSeverity.ERROR, ErrorCategory.METADATA_ERROR, "biosample_id is missing from VCF metadata")
-    METADATA_IDENTIFIER_CONFLICT = (2109, ErrorSeverity.ERROR, ErrorCategory.METADATA_ERROR, "Metadata identifiers conflict with each other")
+    MISSING_REQUIRED_METADATA = (2108, ErrorSeverity.ERROR, ErrorCategory.METADATA_ERROR, "Required metadata value is missing")
     METADATA_REFERENCE_MISMATCH = (2110, ErrorSeverity.ERROR, ErrorCategory.METADATA_ERROR, "Metadata reference and VCF reference do not match")
-    METADATA_BIOSAMPLE_MISMATCH = (2111, ErrorSeverity.ERROR, ErrorCategory.METADATA_ERROR, "Metadata biosample_id and VCF biosample_id do not match")
     METADATA_POPULATION_MISMATCH = (2112, ErrorSeverity.ERROR, ErrorCategory.METADATA_ERROR, "Metadata SampleSet_id and VCF population_id do not match")
 
     # INFO tag-related errors (2200s)
@@ -191,6 +189,25 @@ class ErrorHandler:
         self.severity_counts: Dict[ErrorSeverity, int] = {}
         self.category_counts: Dict[ErrorCategory, int] = {}
         self.suppressed_counts: Dict[ErrorCode, int] = {}
+        self.reference_validation: Optional[Dict[str, Any]] = None
+
+    def set_reference_validation(
+        self,
+        *,
+        vcf_file_path: str,
+        fasta_file_path: str,
+        status: str,
+        stats: Dict[str, int],
+        chromosome_mapping: Dict[str, str],
+    ) -> None:
+        """Store optional FASTA validation results for the unified report."""
+        self.reference_validation = {
+            "vcf_file_path": os.path.abspath(vcf_file_path),
+            "fasta_file_path": os.path.abspath(fasta_file_path),
+            "status": status,
+            "stats": dict(stats),
+            "chromosome_mapping": dict(chromosome_mapping),
+        }
 
     def add_error(self, error: ParseError) -> None:
         """Add error"""
@@ -303,49 +320,76 @@ class ErrorHandler:
         output_tsv_path: Optional[str] = None
     ) -> str:
         """Generate error report"""
-        report_lines = []
-        report_lines.append("=" * 80)
-        report_lines.append("")
-        report_lines.append("")
-        report_lines.append("KVar SNP VCF Parsing Error Report")
-        report_lines.append("")
-        report_lines.append("=" * 80)
+        report_lines = [
+            "=" * 80,
+            "KVar SNP Validation Report",
+            "=" * 80,
+        ]
 
-        # Add absolute path information
         if vcf_file_path:
             abs_vcf_path = os.path.abspath(vcf_file_path)
-            report_lines.append(f"VCF file absolute path: {abs_vcf_path}")
+            report_lines.append(f"Input VCF file absolute path: {abs_vcf_path}")
+
+        if output_tsv_path:
+            abs_output_path = os.path.abspath(output_tsv_path)
+            report_lines.append(f"Output file absolute path: {abs_output_path}")
 
         if output_file:
             abs_error_path = os.path.abspath(output_file)
-            report_lines.append(f"Error report absolute path: {abs_error_path}")
-
-        if output_tsv_path:
-            abs_tsv_path = os.path.abspath(output_tsv_path)
-            report_lines.append(f"Output TSV file absolute path: {abs_tsv_path}")
+            report_lines.append(f"Validation report absolute path: {abs_error_path}")
 
         report_lines.append(f"Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         report_lines.append("")
 
+        if self.reference_validation is not None:
+            reference = self.reference_validation
+            stats = reference["stats"]
+            report_lines.append("=== Reference Validation ===")
+            report_lines.append(f"Status: {reference['status']}")
+            report_lines.append(f"FASTA file: {reference['fasta_file_path']}")
+            report_lines.append(f"Total variants: {stats.get('total_variants', 0)}")
+            report_lines.append(f"  Matched: {stats.get('matched', 0)}")
+            report_lines.append(f"  Mismatched: {stats.get('mismatched', 0)}")
+            report_lines.append(f"  Missing chromosome: {stats.get('missing_chrom', 0)}")
+            report_lines.append(f"  Out of range: {stats.get('out_of_range', 0)}")
+            report_lines.append(f"  Skipped: {stats.get('skipped', 0)}")
+            mappings = {
+                source: target
+                for source, target in reference["chromosome_mapping"].items()
+                if source != target
+            }
+            if mappings:
+                report_lines.append("Chromosome name mapping:")
+                for source, target in sorted(mappings.items()):
+                    report_lines.append(f"  {source} -> {target}")
+            report_lines.append("")
+
         # Summary
         summary = self.get_summary()
-        report_lines.append("=== Error Summary ===")
-        report_lines.append(f"Total errors: {summary['total_errors']}")
+        report_lines.append("=== Validation Summary ===")
+        report_lines.append(f"Total issues: {summary['total_errors']}")
         report_lines.append(f"  Critical: {summary['critical_count']}")
         report_lines.append(f"  Error: {summary['error_count']}")
         report_lines.append(f"  Warning: {summary['warning_count']}")
         report_lines.append(f"  Info: {summary['info_count']}")
+        if summary['total_errors'] == 0:
+            report_lines.append("No issues.")
         report_lines.append(f"Detail cap per code: {summary['max_details_per_code']}")
         report_lines.append(f"Stored message details: {summary['stored_detail_count']}")
         report_lines.append(f"Suppressed message details: {summary['suppressed_count']}")
         report_lines.append("")
 
         # Statistics by category
-        report_lines.append("=== Errors by Category ===")
-        for category, count in summary['errors_by_category'].items():
-            if count > 0:
+        nonzero_categories = {
+            category: count
+            for category, count in summary['errors_by_category'].items()
+            if count > 0
+        }
+        if nonzero_categories:
+            report_lines.append("=== Errors by Category ===")
+            for category, count in nonzero_categories.items():
                 report_lines.append(f"  {category}: {count}")
-        report_lines.append("")
+            report_lines.append("")
 
         # Statistics by error code
         if summary['error_counts_by_code']:
@@ -392,6 +436,7 @@ class ErrorHandler:
         report = {
             "timestamp": datetime.now().isoformat(),
             "summary": self.get_summary(),
+            "reference_validation": self.reference_validation,
             "errors": [error.to_dict() for error in self.errors],
             "suppressed_counts_by_code": {
                 code.name: count for code, count in self.suppressed_counts.items()
@@ -411,12 +456,13 @@ class ErrorHandler:
         self.severity_counts.clear()
         self.category_counts.clear()
         self.suppressed_counts.clear()
+        self.reference_validation = None
 
     def print_summary(self) -> None:
         """Print error summary to console"""
         summary = self.get_summary()
         print("\n=== Parsing Error Summary ===")
-        print(f"Total errors: {summary['total_errors']}")
+        print(f"Total issues: {summary['total_errors']}")
         print(f"  Critical: {summary['critical_count']}")
         print(f"  Error: {summary['error_count']}")
         print(f"  Warning: {summary['warning_count']}")

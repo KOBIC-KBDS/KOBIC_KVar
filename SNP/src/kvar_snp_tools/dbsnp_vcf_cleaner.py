@@ -66,15 +66,15 @@ class DbSNPVCFCleaner:
         self,
         vcf_file_path: str,
         output_file_path: str,
-        metadata_file_path: Optional[str] = None,
+        metadata_file_path: str,
         error_report_path: Optional[str] = None,
     ) -> None:
         """Validate and rewrite a dbSNP VCF file."""
-        if metadata_file_path:
-            metadata_validator = MetadataValidator(self.error_handler)
-            self.metadata_info = metadata_validator.parse_metadata_file(metadata_file_path)
+        metadata_validator = MetadataValidator(self.error_handler)
+        self.metadata_info = metadata_validator.parse_metadata_file(metadata_file_path)
 
         self.parser.parse_header(vcf_file_path)
+        self.parser.validate_single_population_header()
         self.contig_lines = self._read_contig_lines(vcf_file_path)
         self._record_unsupported_header_info_tags()
 
@@ -99,7 +99,14 @@ class DbSNPVCFCleaner:
             output_tsv_path=output_file_path,
         )
 
-        self._write_cleaned_vcf(vcf_file_path, output_file_path)
+        try:
+            self._write_cleaned_vcf(vcf_file_path, output_file_path)
+        except Exception as exc:
+            self.error_handler.create_error(
+                ErrorCode.FILE_WRITE_ERROR,
+                additional_info={"file_path": output_file_path, "error": str(exc)},
+            )
+            raise
         self.error_handler.generate_report(
             error_report_path,
             vcf_file_path=vcf_file_path,
@@ -136,8 +143,6 @@ class DbSNPVCFCleaner:
             "filedate": metadata.filedate,
             "handle": metadata.handle,
             "batch": metadata.batch,
-            "bioproject_id": metadata.bioproject_id,
-            "biosample_id": metadata.biosample_id,
             "reference": metadata.reference,
         }
 
@@ -150,12 +155,8 @@ class DbSNPVCFCleaner:
 
         if self.metadata_info.experiment_id:
             header_metadata.batch = self.metadata_info.experiment_id
-        if self.metadata_info.bioproject_id:
-            header_metadata.bioproject_id = self.metadata_info.bioproject_id
         if self.metadata_info.reference and not header_metadata.reference:
             header_metadata.reference = self.metadata_info.reference
-        if self.metadata_info.sampleset_ids:
-            self.parser.header.population_ids = list(self.metadata_info.sampleset_ids)
 
     def _validate_streaming_rows(self, vcf_file_path: str) -> None:
         """Validate data rows without retaining them all in memory."""
@@ -256,10 +257,6 @@ class DbSNPVCFCleaner:
             handle.write(f"##handle={metadata.handle}\n")
         if metadata.batch:
             handle.write(f"##batch={metadata.batch}\n")
-        if metadata.bioproject_id:
-            handle.write(f"##bioproject_id={metadata.bioproject_id}\n")
-        if metadata.biosample_id:
-            handle.write(f"##biosample_id={metadata.biosample_id}\n")
         if metadata.reference:
             handle.write(f"##reference={metadata.reference}\n")
         for contig_line in self.contig_lines:

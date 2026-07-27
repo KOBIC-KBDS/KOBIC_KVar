@@ -8,8 +8,6 @@ __pycache__/
 htmlcov/
 *.errors.txt
 *_errors.txt
-*.ref_check_report.txt
-*_ref_check_report.txt
 *.fai
 SNP/examples/*.cleaned*.vcf
 SNP/examples/*.cleaned*.vcf.gz

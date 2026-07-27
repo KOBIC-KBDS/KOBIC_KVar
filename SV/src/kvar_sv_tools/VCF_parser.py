@@ -27,9 +27,6 @@ class VCFHeaderMetadata:
     fileformat: Optional[str] = None
     filedate: Optional[str] = None
     source: Optional[str] = None
-    reference: Optional[str] = None
-    batch: Optional[str] = None  # Maps to Experiment_id
-    population_id: Optional[List[str]] = None  # Maps to SampleSet_id
 
 
 @dataclass
@@ -494,9 +491,6 @@ class KVarVCFParser:
         self.strict_kvar_tags = strict_kvar_tags
         self.reference_fasta_path = reference_fasta_path
         self.reference: Optional[FastaReference] = None
-        self.expected_sampleset_id: Optional[str] = None
-        self.expected_experiment_id: Optional[str] = None
-        self.expected_reference: Optional[str] = None
         self._reset_parse_state()
 
         if reference_fasta_path:
@@ -526,29 +520,10 @@ class KVarVCFParser:
         self._closed_chroms: Set[str] = set()
         self._last_pos_by_chrom: Dict[str, int] = {}
         self._bnd_mate_refs: List[Tuple[int, str, str]] = []
-        self._reference_skip_reported = False
-
-    def set_expected_metadata(
-        self,
-        sampleset_id: Optional[str] = None,
-        experiment_id: Optional[str] = None,
-        reference: Optional[str] = None
-    ) -> None:
-        """Provide metadata-file values used as global KVar tag context."""
-        self.expected_sampleset_id = sampleset_id
-        self.expected_experiment_id = experiment_id
-        self.expected_reference = reference
 
     def parse_file(self, file_path: str) -> None:
         """Main method to parse VCF file"""
         self._reset_parse_state()
-
-        if not self.reference and self.reference_fasta_path is None and not self._reference_skip_reported:
-            self.error_handler.create_error(
-                ErrorCode.REF_CHECK_SKIPPED,
-                additional_info={"message": "No reference FASTA path was provided"}
-            )
-            self._reference_skip_reported = True
 
         if not os.path.exists(file_path):
             self.error_handler.create_error(
@@ -645,22 +620,14 @@ class KVarVCFParser:
                 ErrorCode.MISSING_COLUMN_HEADER
             )
 
-        if not self.header.metadata.reference:
+        fileformat_count = self._metadata_tag_counts.get("fileformat", 0)
+        if fileformat_count > 1:
             self.error_handler.create_error(
-                ErrorCode.MISSING_REQUIRED_METADATA,
-                field_name="reference",
-                expected_value="##reference=..."
+                ErrorCode.DUPLICATE_METADATA_TAG,
+                field_name="fileformat",
+                expected_value="unique metadata tag",
+                actual_value=f"{fileformat_count} occurrences",
             )
-
-        for tag in ("fileformat", "reference"):
-            count = self._metadata_tag_counts.get(tag, 0)
-            if count > 1:
-                self.error_handler.create_error(
-                    ErrorCode.DUPLICATE_METADATA_TAG,
-                    field_name=tag,
-                    expected_value="unique metadata tag",
-                    actual_value=f"{count} occurrences",
-                )
 
     def _parse_metadata_line(self, line: str, line_number: int) -> None:
         """메타데이터 라인을 파싱하는 메서드"""
@@ -683,22 +650,6 @@ class KVarVCFParser:
                 self.header.metadata.filedate = value
             elif key == 'source':
                 self.header.metadata.source = value
-            elif key == 'reference':
-                self.header.metadata.reference = value
-            elif key == 'batch':
-                # batch maps to Experiment_id
-                self.header.metadata.batch = value
-            elif key == 'experiment_id':
-                self.header.metadata.batch = value
-            elif key == 'population_id':
-                # population_id maps to SampleSet_id
-                if self.header.metadata.population_id is None:
-                    self.header.metadata.population_id = []
-                self.header.metadata.population_id.append(value)
-            elif key in {'sampleset_id', 'sample_set_id'}:
-                if self.header.metadata.population_id is None:
-                    self.header.metadata.population_id = []
-                self.header.metadata.population_id.append(value)
             elif key == 'info':
                 self._parse_info_tag_definition(line, line_number)
             elif key == 'format':
@@ -1219,30 +1170,6 @@ class KVarVCFParser:
                     field_name="INFO"
                 )
 
-        if enforce_kvar_tags and "SAMPLESET" not in info_dict:
-            if not self.header.metadata.population_id and not self.expected_sampleset_id:
-                self.error_handler.create_error(
-                    ErrorCode.MISSING_SAMPLESET_TAG,
-                    line_number=line_number,
-                    variant_id=variant_id,
-                    field_name="INFO",
-                    additional_info={
-                        "note": "SAMPLESET missing in INFO, VCF header, and metadata file context"
-                    }
-                )
-
-        if enforce_kvar_tags and "EXPERIMENT" not in info_dict:
-            if not self.header.metadata.batch and not self.expected_experiment_id:
-                self.error_handler.create_error(
-                    ErrorCode.MISSING_EXPERIMENT_TAG,
-                    line_number=line_number,
-                    variant_id=variant_id,
-                    field_name="INFO",
-                    additional_info={
-                        "note": "EXPERIMENT missing in INFO, VCF header, and metadata file context"
-                    }
-                )
-
         end = info_dict.get("END")
         if end is not None:
             if not isinstance(end, int):
@@ -1711,8 +1638,7 @@ class KVarVCFParser:
             'header_metadata': {
                 'fileformat': self.header.metadata.fileformat,
                 'filedate': self.header.metadata.filedate,
-                'source': self.header.metadata.source,
-                'reference': self.header.metadata.reference
+                'source': self.header.metadata.source
             },
             'info_tags': {tag_id: tag_def.description for tag_id, tag_def in self.header.info_tags.items()},
             'format_tags': {tag_id: tag_def.description for tag_id, tag_def in self.header.format_tags.items()},

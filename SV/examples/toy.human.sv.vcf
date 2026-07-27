@@ -1,0 +1,17 @@
+##fileformat=VCFv4.2
+##source=KOBIC_KVar_synthetic_human_example
+##contig=<ID=chr1,length=240>
+##contig=<ID=chr2,length=240>
+##INFO=<ID=SVTYPE,Number=1,Type=String,Description="SV type">
+##INFO=<ID=END,Number=1,Type=Integer,Description="End coordinate">
+##INFO=<ID=SVLEN,Number=1,Type=Integer,Description="SV length">
+##INFO=<ID=SEQ,Number=1,Type=String,Description="Inserted sequence">
+##INFO=<ID=MATEID,Number=1,Type=String,Description="Mate breakend ID">
+##INFO=<ID=EVENT,Number=1,Type=String,Description="Breakend event ID">
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO
+chr1	20	human_del1	A	<DEL>	.	PASS	SVTYPE=DEL;END=70;SVLEN=-50
+chr1	90	human_ins1	A	<INS>	.	PASS	SVTYPE=INS;END=90;SVLEN=12;SEQ=TTGCACTGATGC
+chr1	110	human_dup1	A	<DUP:TANDEM>	.	PASS	SVTYPE=DUP;END=170;SVLEN=60
+chr1	180	human_inv1	A	<INV>	.	PASS	SVTYPE=INV;END=220;SVLEN=40
+chr1	230	human_bnd1	A	A]chr2:200]	.	PASS	SVTYPE=BND;MATEID=human_bnd2;EVENT=human_event1
+chr2	200	human_bnd2	C	C]chr1:230]	.	PASS	SVTYPE=BND;MATEID=human_bnd1;EVENT=human_event1

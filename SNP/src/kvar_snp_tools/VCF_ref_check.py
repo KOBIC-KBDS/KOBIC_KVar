@@ -9,7 +9,7 @@ import sys
 import os
 import gzip
 import argparse
-from typing import Dict, List, Optional, Any, Set
+from typing import Dict, Optional, Set
 from collections import defaultdict
 
 # Use pyfaidx library (FASTA file indexing)
@@ -41,45 +41,45 @@ class VCFRefChecker:
             'out_of_range': 0,
             'skipped': 0
         }
-        self.mismatch_cases: List[Dict[str, Any]] = []
         self.chromosome_mapping: Dict[str, str] = {}  # VCF chromosome name -> FASTA chromosome name mapping
 
     def check_vcf_against_fasta(
         self,
         vcf_file_path: str,
         fasta_file_path: str,
-        output_report_path: Optional[str] = None
     ) -> None:
-        """Main method: compare VCF REF sequence with reference genome"""
-        # Load FASTA file
+        """Collect optional FASTA validation results in the shared error handler."""
         try:
             self._load_fasta(fasta_file_path)
         except Exception as e:
-            self.error_handler.create_error(
-                ErrorCode.FASTA_READ_ERROR,
-                additional_info={"file_path": fasta_file_path, "error": str(e)}
+            if not self.error_handler.has_critical_errors():
+                self.error_handler.create_error(
+                    ErrorCode.FASTA_READ_ERROR,
+                    additional_info={"file_path": fasta_file_path, "error": str(e)}
+                )
+            self._store_result(
+                vcf_file_path,
+                fasta_file_path,
+                status="FAILED",
             )
-            raise
+            return
 
-        # Parse and validate VCF file
         try:
             self._check_vcf_file(vcf_file_path)
-        except Exception as e:
-            if self.error_handler.has_critical_errors():
-                print("Validation stopped due to critical errors.")
-                if output_report_path:
-                    self._generate_report(output_report_path, vcf_file_path, fasta_file_path)
-                raise
+        except Exception:
+            self._store_result(
+                vcf_file_path,
+                fasta_file_path,
+                status="FAILED",
+            )
+            return
 
-        # Generate report
-        if output_report_path is None:
-            output_report_path = vcf_file_path.replace('.vcf', '_ref_check_report.txt')
-            if vcf_file_path.endswith('.gz'):
-                output_report_path = vcf_file_path.replace('.vcf.gz', '_ref_check_report.txt')
+        self._store_result(
+            vcf_file_path,
+            fasta_file_path,
+            status="COMPLETED",
+        )
 
-        self._generate_report(output_report_path, vcf_file_path, fasta_file_path)
-
-        # Print summary
         print(f"\n=== REF validation complete ===")
         print(f"Total variants: {self.stats['total_variants']}")
         print(f"  Matched: {self.stats['matched']}")
@@ -87,13 +87,21 @@ class VCFRefChecker:
         print(f"  Missing chromosome: {self.stats['missing_chrom']}")
         print(f"  Out of range: {self.stats['out_of_range']}")
         print(f"  Skipped: {self.stats['skipped']}")
-        print(f"\nReport file: {output_report_path}")
 
-        # Print error summary
-        self.error_handler.print_summary()
-
-        self.error_handler.assert_no_blocking_errors(
-            stage="VCF reference check"
+    def _store_result(
+        self,
+        vcf_file_path: str,
+        fasta_file_path: str,
+        *,
+        status: str,
+    ) -> None:
+        """Attach reference statistics to the unified validation report."""
+        self.error_handler.set_reference_validation(
+            vcf_file_path=vcf_file_path,
+            fasta_file_path=fasta_file_path,
+            status=status,
+            stats=self.stats,
+            chromosome_mapping=self.chromosome_mapping,
         )
 
     def _load_fasta(self, fasta_file_path: str) -> None:
@@ -129,21 +137,14 @@ class VCFRefChecker:
     def _check_vcf_file(self, vcf_file_path: str) -> None:
         """Parse VCF file and validate REF for each variant"""
         if not os.path.exists(vcf_file_path):
-            self.error_handler.create_error(
-                ErrorCode.FILE_NOT_FOUND,
-                additional_info={"file_path": vcf_file_path, "file_type": "VCF"}
-            )
+            # The main VCF validator owns input-file errors in the unified report.
             raise FileNotFoundError(f"VCF file not found: {vcf_file_path}")
 
         # Check if gzipped
         is_gzipped = vcf_file_path.endswith('.gz')
 
-        try:
-            if is_gzipped:
-                f = gzip.open(vcf_file_path, 'rt', encoding='utf-8')
-            else:
-                f = open(vcf_file_path, 'r', encoding='utf-8')
-
+        opener = gzip.open if is_gzipped else open
+        with opener(vcf_file_path, 'rt', encoding='utf-8') as f:
             line_number = 0
             batch_size = 10000
             processed_count = 0
@@ -168,21 +169,7 @@ class VCFRefChecker:
                 if processed_count % batch_size == 0:
                     print(f"  {processed_count:,} variants validated...")
 
-            f.close()
-            print(f"VCF file parsing complete: {self.stats['total_variants']} variants validated")
-
-        except UnicodeDecodeError as e:
-            self.error_handler.create_error(
-                ErrorCode.FILE_ENCODING_ERROR,
-                additional_info={"file_path": vcf_file_path, "error": str(e)}
-            )
-            raise
-        except Exception as e:
-            self.error_handler.create_error(
-                ErrorCode.FILE_READ_ERROR,
-                additional_info={"file_path": vcf_file_path, "error": str(e)}
-            )
-            raise
+        print(f"VCF file parsing complete: {self.stats['total_variants']} variants validated")
 
     def _check_variant_line(self, line: str, line_number: int) -> None:
         """Validate REF for a single VCF data line"""
@@ -282,15 +269,6 @@ class VCFRefChecker:
         else:
             # Mismatch
             self.stats['mismatched'] += 1
-            mismatch_info = {
-                'chrom': chrom,
-                'pos': pos,
-                'vcf_ref': ref,
-                'fasta_seq': fasta_seq,
-                'line_number': line_number
-            }
-            self.mismatch_cases.append(mismatch_info)
-
             self.error_handler.create_error(
                 ErrorCode.REF_MISMATCH,
                 line_number=line_number,
@@ -341,84 +319,3 @@ class VCFRefChecker:
 
         # No match
         return None
-
-    def _generate_report(
-        self,
-        output_path: str,
-        vcf_file_path: str,
-        fasta_file_path: str
-    ) -> None:
-        """Generate validation result report"""
-        report_lines = []
-        report_lines.append("=" * 80)
-        report_lines.append("VCF REF Sequence Validation Report")
-        report_lines.append("=" * 80)
-        report_lines.append("")
-
-        # File information
-        report_lines.append("=== Input Files ===")
-        report_lines.append(f"VCF file: {os.path.abspath(vcf_file_path)}")
-        report_lines.append(f"FASTA file: {os.path.abspath(fasta_file_path)}")
-        report_lines.append("")
-
-        # Statistics
-        report_lines.append("=== Validation Statistics ===")
-        report_lines.append(f"Total variants: {self.stats['total_variants']:,}")
-        report_lines.append(f"  Matched: {self.stats['matched']:,} ({self.stats['matched']/max(self.stats['total_variants'], 1)*100:.2f}%)")
-        report_lines.append(f"  Mismatched: {self.stats['mismatched']:,} ({self.stats['mismatched']/max(self.stats['total_variants'], 1)*100:.2f}%)")
-        report_lines.append(f"  Missing chromosome: {self.stats['missing_chrom']:,}")
-        report_lines.append(f"  Out of range: {self.stats['out_of_range']:,}")
-        report_lines.append(f"  Skipped: {self.stats['skipped']:,}")
-        report_lines.append("")
-
-        # Chromosome mapping
-        if self.chromosome_mapping:
-            report_lines.append("=== Chromosome Name Mapping ===")
-            for vcf_chrom, fasta_chrom in sorted(self.chromosome_mapping.items()):
-                if vcf_chrom != fasta_chrom:
-                    report_lines.append(f"  {vcf_chrom} -> {fasta_chrom}")
-            report_lines.append("")
-
-        # Mismatch details (max 100)
-        if self.mismatch_cases:
-            report_lines.append("=== REF Mismatch Details ===")
-            report_lines.append(f"(Showing up to 100 of {len(self.mismatch_cases)} total)")
-            report_lines.append("")
-
-            for i, mismatch in enumerate(self.mismatch_cases[:100], 1):
-                report_lines.append(f"[{i}] {mismatch['chrom']}:{mismatch['pos']}")
-                report_lines.append(f"  Line number: {mismatch['line_number']}")
-                report_lines.append(f"  VCF REF: {mismatch['vcf_ref']}")
-                report_lines.append(f"  FASTA:   {mismatch['fasta_seq']}")
-                report_lines.append("")
-
-            if len(self.mismatch_cases) > 100:
-                report_lines.append(f"... ({len(self.mismatch_cases) - 100} more omitted)")
-                report_lines.append("")
-
-        # Error report section
-        if self.error_handler.has_errors():
-            report_lines.append("=" * 80)
-            report_lines.append("Error Details")
-            report_lines.append("=" * 80)
-            report_lines.append("")
-
-            error_report = self.error_handler.generate_report(
-                output_file=None,
-                vcf_file_path=vcf_file_path,
-                output_tsv_path=None
-            )
-            report_lines.append(error_report)
-
-        # Save report file
-        report_text = "\n".join(report_lines)
-        try:
-            with open(output_path, 'w', encoding='utf-8') as f:
-                f.write(report_text)
-            print(f"Report file created: {output_path}")
-        except Exception as e:
-            self.error_handler.create_error(
-                ErrorCode.FILE_WRITE_ERROR,
-                additional_info={"file_path": output_path, "error": str(e)}
-            )
-            print(f"Warning: Failed to save report file: {e}")
