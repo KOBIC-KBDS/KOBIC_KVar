@@ -11,5 +11,6 @@ htmlcov/
 *.fai
 SNP/examples/*.cleaned*.vcf
 SNP/examples/*.cleaned*.vcf.gz
+SNP/examples/toy.human.snp.generic.dbsnp.vcf
 .omc/
 .omx/

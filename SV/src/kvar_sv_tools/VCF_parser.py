@@ -8,6 +8,7 @@ Parses VCF files conforming to KVar SV VCF submission format and extracts all in
 import os
 import gzip
 import re
+import tempfile
 from typing import Dict, List, Optional, Any, Tuple, Set
 from dataclasses import dataclass, field
 from collections import defaultdict
@@ -188,6 +189,47 @@ class SVClassifier:
 class BreakendParser:
     """Breakend parsing (VCF v4.1 compliant)"""
 
+    CONTIG_PATTERN = (
+        r'[0-9A-Za-z!#$%&+./:;?@^_|~-]'
+        r'[0-9A-Za-z!#$%&*+./:;=?@^_|~-]*'
+    )
+
+    @staticmethod
+    def _parse_paired_breakend_alt(
+        alt: str,
+    ) -> Optional[Tuple[str, str, str, str]]:
+        """Return local placement, local sequence, remote chromosome, and position."""
+        suffix_match = re.fullmatch(
+            r'(?P<local>[ACGTNacgtn]+)'
+            r'(?P<bracket>[\[\]])'
+            rf'(?P<chrom>{BreakendParser.CONTIG_PATTERN}):(?P<pos>[1-9]\d*)'
+            r'(?P=bracket)',
+            alt or "",
+        )
+        if suffix_match:
+            return (
+                "suffix",
+                suffix_match.group("local"),
+                suffix_match.group("chrom"),
+                suffix_match.group("pos"),
+            )
+
+        prefix_match = re.fullmatch(
+            r'(?P<bracket>[\[\]])'
+            rf'(?P<chrom>{BreakendParser.CONTIG_PATTERN}):(?P<pos>[1-9]\d*)'
+            r'(?P=bracket)'
+            r'(?P<local>[ACGTNacgtn]+)',
+            alt or "",
+        )
+        if prefix_match:
+            return (
+                "prefix",
+                prefix_match.group("local"),
+                prefix_match.group("chrom"),
+                prefix_match.group("pos"),
+            )
+        return None
+
     @staticmethod
     def parse_breakend(alt: str) -> Tuple[str, str, str]:
         """Extract translocation info from Breakend ALT field"""
@@ -197,27 +239,37 @@ class BreakendParser:
     @staticmethod
     def parse_breakend_placement(alt: str) -> Tuple[str, str, str, str]:
         """Return from_strand, to_chr, to_pos, to_strand for a paired breakend ALT."""
-        pattern = r'[\[\]]([^\[\]:]+):(\d+)[\[\]]'
-        match = re.search(pattern, alt or "")
-        if not match:
+        parsed = BreakendParser._parse_paired_breakend_alt(alt)
+        if not parsed:
             return ".", ".", ".", "."
 
-        to_chr, to_pos = match.group(1), match.group(2)
-        if alt.startswith("]"):
+        placement, _, to_chr, to_pos = parsed
+        bracket = (alt or "")[0] if placement == "prefix" else (alt or "")[-1]
+        if placement == "prefix" and bracket == "]":
             return "-", to_chr, to_pos, "-"
-        if alt.startswith("["):
+        if placement == "prefix" and bracket == "[":
             return "-", to_chr, to_pos, "+"
-        if "]" in alt:
+        if bracket == "]":
             return "+", to_chr, to_pos, "-"
-        if "[" in alt:
+        if bracket == "[":
             return "+", to_chr, to_pos, "+"
         return ".", to_chr, to_pos, "."
 
     @staticmethod
-    def is_breakend_alt(alt: str) -> bool:
-        """Return True when ALT contains a valid VCF breakend target."""
-        chr2, pos2, _ = BreakendParser.parse_breakend(alt)
-        return chr2 != "." and pos2 != "."
+    def is_breakend_alt(alt: str, ref: Optional[str] = None) -> bool:
+        """Return True when ALT is one complete, REF-anchored paired breakend."""
+        parsed = BreakendParser._parse_paired_breakend_alt(alt)
+        if not parsed:
+            return False
+        if not ref:
+            return True
+
+        placement, local_sequence, _, _ = parsed
+        ref_upper = str(ref).upper()
+        local_upper = local_sequence.upper()
+        if placement == "suffix":
+            return local_upper.startswith(ref_upper)
+        return local_upper.endswith(ref_upper)
 
     @staticmethod
     def parse_single_breakend(alt: str, ref: str) -> Tuple[str, str]:
@@ -242,29 +294,28 @@ class BreakendParser:
     @staticmethod
     def inserted_sequence(alt: str, ref: str) -> str:
         """Return sequence inserted within a paired or single breakend ALT."""
-        ref_pattern = re.escape(ref or "")
-        if not ref_pattern:
+        if not ref:
             return ""
 
         single_strand, single_sequence = BreakendParser.parse_single_breakend(alt, ref)
         if single_strand != ".":
             return single_sequence
+        if not BreakendParser.is_breakend_alt(alt, ref):
+            return ""
 
-        patterns = [
-            rf'^{ref_pattern}([ACGTNacgtn]*)\[[^\[\]]+\[$',
-            rf'^{ref_pattern}([ACGTNacgtn]*)\][^\[\]]+\]$',
-            rf'^\][^\[\]]+\]([ACGTNacgtn]*){ref_pattern}$',
-            rf'^\[[^\[\]]+\[([ACGTNacgtn]*){ref_pattern}$',
-        ]
-        for pattern in patterns:
-            match = re.fullmatch(pattern, alt or "")
-            if match:
-                return match.group(1)
-        return ""
+        placement, local_sequence, _, _ = BreakendParser._parse_paired_breakend_alt(alt) or (
+            "",
+            "",
+            "",
+            "",
+        )
+        if placement == "suffix":
+            return local_sequence[len(ref):]
+        return local_sequence[:-len(ref)]
 
 
 class FastaReference:
-    """Indexed FASTA reader using an existing .fai file."""
+    """Indexed FASTA reader with a reusable, automatically generated .fai."""
 
     GRCH38_REFSEQ_ALIASES = {
         "NC_000001.11": "chr1",
@@ -299,31 +350,366 @@ class FastaReference:
         self.index_path = f"{fasta_path}.fai"
         self.index: Dict[str, Tuple[int, int, int, int]] = {}
         self.alias_to_chrom: Dict[str, str] = {}
-        self.accessions_by_chrom: Dict[str, List[str]] = defaultdict(list)
-        self.assemblies: Set[str] = set()
+        self._fasta_handle = None
 
         if not os.path.exists(fasta_path):
             raise FileNotFoundError(f"FASTA file not found: {fasta_path}")
-        if not os.path.exists(self.index_path):
-            raise FileNotFoundError(f"FASTA index file not found: {self.index_path}")
 
-        with open(self.index_path, "r", encoding="utf-8") as fai:
-            for line in fai:
-                parts = line.rstrip("\n").split("\t")
-                if len(parts) < 5:
-                    raise ValueError(f"Invalid FASTA index line: {line.rstrip()}")
-                chrom = parts[0]
-                self.index[chrom] = (
-                    int(parts[1]),
-                    int(parts[2]),
-                    int(parts[3]),
-                    int(parts[4]),
-                )
-
-        if not self.index:
-            raise ValueError(f"FASTA index is empty: {self.index_path}")
+        if self._index_is_current():
+            try:
+                self.index = self._load_index(self.index_path)
+            except (OSError, ValueError):
+                self.index = self._build_index()
+                self._cache_index()
+        else:
+            self.index = self._build_index()
+            self._cache_index()
 
         self._build_aliases()
+
+    def _index_is_current(self) -> bool:
+        """Return True when the cached index is at least as new as the FASTA."""
+        try:
+            return (
+                os.stat(self.index_path).st_mtime_ns
+                >= os.stat(self.fasta_path).st_mtime_ns
+            )
+        except OSError:
+            return False
+
+    def _load_index(self, index_path: str) -> Dict[str, Tuple[int, int, int, int]]:
+        """Load and structurally validate a FASTA index."""
+        index: Dict[str, Tuple[int, int, int, int]] = {}
+        fasta_size = os.path.getsize(self.fasta_path)
+        with open(index_path, "r", encoding="utf-8") as fai:
+            for line_number, line in enumerate(fai, 1):
+                parts = line.rstrip("\r\n").split("\t")
+                if len(parts) < 5 or not parts[0]:
+                    raise ValueError(
+                        f"Invalid FASTA index line {line_number}: {line.rstrip()}"
+                    )
+                chrom = parts[0]
+                if chrom in index:
+                    raise ValueError(f"Duplicate FASTA index sequence name: {chrom}")
+                try:
+                    length, offset, line_bases, line_width = (
+                        int(parts[1]),
+                        int(parts[2]),
+                        int(parts[3]),
+                        int(parts[4]),
+                    )
+                except ValueError as exc:
+                    raise ValueError(
+                        f"Invalid FASTA index line {line_number}: {line.rstrip()}"
+                    ) from exc
+                if (
+                    length < 1
+                    or offset < 0
+                    or offset >= fasta_size
+                    or line_bases < 1
+                    or line_width < line_bases
+                ):
+                    raise ValueError(
+                        f"Invalid FASTA index values on line {line_number}"
+                    )
+                index[chrom] = (length, offset, line_bases, line_width)
+
+        if not index:
+            raise ValueError(f"FASTA index is empty: {index_path}")
+
+        entries = list(index.items())
+        next_header_offset = 0
+        with open(self.fasta_path, "rb") as fasta:
+            for entry_number, (chrom, values) in enumerate(entries):
+                fasta.seek(next_header_offset)
+                header = fasta.readline()
+                if not header.startswith(b">"):
+                    raise ValueError(
+                        f"FASTA index record does not follow a header: {chrom}"
+                    )
+                try:
+                    header_name = (
+                        header[1:].strip().split(None, 1)[0].decode("utf-8")
+                    )
+                except (IndexError, UnicodeDecodeError) as exc:
+                    raise ValueError("Invalid FASTA sequence header") from exc
+                if header_name != chrom or fasta.tell() != values[1]:
+                    raise ValueError(
+                        f"FASTA index order or sequence offset is invalid for {chrom}"
+                    )
+
+                next_header_offset = self._validate_cached_index_record(
+                    fasta,
+                    fasta_size,
+                    chrom,
+                    values,
+                )
+                is_last_entry = entry_number == len(entries) - 1
+                if is_last_entry and next_header_offset != fasta_size:
+                    raise ValueError(
+                        f"FASTA contains records absent from the index after {chrom}"
+                    )
+                if not is_last_entry and next_header_offset >= fasta_size:
+                    raise ValueError(
+                        f"FASTA index contains records absent from the FASTA after {chrom}"
+                    )
+        return index
+
+    @staticmethod
+    def _header_name_before_offset(fasta, sequence_offset: int) -> Optional[str]:
+        """Read only the FASTA header immediately preceding a sequence offset."""
+        if sequence_offset < 2:
+            return None
+
+        end = sequence_offset - 1
+        fasta.seek(end)
+        if fasta.read(1) != b"\n":
+            return None
+        end -= 1
+        if end >= 0:
+            fasta.seek(end)
+            if fasta.read(1) == b"\r":
+                end -= 1
+
+        chunks: List[bytes] = []
+        cursor = end + 1
+        while cursor > 0:
+            chunk_start = max(0, cursor - 4096)
+            fasta.seek(chunk_start)
+            chunk = fasta.read(cursor - chunk_start)
+            newline = chunk.rfind(b"\n")
+            if newline >= 0:
+                chunks.append(chunk[newline + 1:])
+                break
+            chunks.append(chunk)
+            cursor = chunk_start
+
+        header = b"".join(reversed(chunks)).strip()
+        if not header.startswith(b">"):
+            return None
+        try:
+            return header[1:].split(None, 1)[0].decode("utf-8")
+        except (IndexError, UnicodeDecodeError):
+            return None
+
+    def _validate_cached_index_record(
+        self,
+        fasta,
+        fasta_size: int,
+        chrom: str,
+        values: Tuple[int, int, int, int],
+    ) -> int:
+        """Run bounded offset/end-of-record checks on one cached index entry."""
+        length, offset, line_bases, line_width = values
+        header_name = self._header_name_before_offset(fasta, offset)
+        if header_name != chrom:
+            raise ValueError(
+                f"FASTA index header offset does not match sequence {chrom}"
+            )
+
+        fasta.seek(offset)
+        first_line = fasta.readline()
+        first_sequence_line = first_line.rstrip(b"\r\n")
+        if (
+            not first_sequence_line
+            or len(first_sequence_line) != line_bases
+            or len(first_line) != line_width
+            or any(
+                byte <= 32 or byte > 126
+                for byte in first_sequence_line
+            )
+            or b">" in first_sequence_line
+        ):
+            raise ValueError(
+                f"FASTA index line metrics are invalid for {chrom}"
+            )
+
+        last_base_offset = (
+            offset
+            + ((length - 1) // line_bases) * line_width
+            + ((length - 1) % line_bases)
+        )
+        if last_base_offset >= fasta_size:
+            raise ValueError(
+                f"FASTA index length exceeds the sequence record for {chrom}"
+            )
+
+        fasta.seek(last_base_offset)
+        last_base = fasta.read(1)
+        if (
+            not last_base
+            or last_base in b" \t\r\n>"
+            or last_base[0] > 127
+        ):
+            raise ValueError(
+                f"FASTA index has an invalid last-base offset for {chrom}"
+            )
+
+        boundary = fasta.read(1)
+        if boundary == b"\r":
+            if fasta.read(1) != b"\n":
+                raise ValueError(
+                    f"FASTA index has an invalid record boundary for {chrom}"
+                )
+            boundary = fasta.read(1)
+        elif boundary == b"\n":
+            boundary = fasta.read(1)
+        elif boundary:
+            raise ValueError(
+                f"FASTA index length truncates the sequence record for {chrom}"
+            )
+
+        if boundary not in {b"", b">"}:
+            raise ValueError(
+                f"FASTA index length does not end at the record boundary for {chrom}"
+            )
+        if boundary == b">":
+            return fasta.tell() - 1
+        return fasta.tell()
+
+    def _build_index(self) -> Dict[str, Tuple[int, int, int, int]]:
+        """Build an faidx-compatible index directly from the FASTA bytes."""
+        index: Dict[str, Tuple[int, int, int, int]] = {}
+        current_name: Optional[str] = None
+        sequence_length = 0
+        sequence_offset: Optional[int] = None
+        line_bases: Optional[int] = None
+        line_width: Optional[int] = None
+        terminal_line_seen = False
+
+        def finish_record() -> None:
+            nonlocal current_name
+            if current_name is None:
+                return
+            if (
+                sequence_length < 1
+                or sequence_offset is None
+                or line_bases is None
+                or line_width is None
+            ):
+                raise ValueError(
+                    f"FASTA sequence has no bases: {current_name}"
+                )
+            index[current_name] = (
+                sequence_length,
+                sequence_offset,
+                line_bases,
+                line_width,
+            )
+
+        try:
+            with open(self.fasta_path, "rb") as fasta:
+                while True:
+                    line_offset = fasta.tell()
+                    raw_line = fasta.readline()
+                    if not raw_line:
+                        break
+
+                    if raw_line.startswith(b">"):
+                        finish_record()
+                        header = raw_line[1:].strip()
+                        if not header:
+                            raise ValueError("FASTA header has no sequence name")
+                        try:
+                            current_name = header.split(None, 1)[0].decode("utf-8")
+                        except UnicodeDecodeError as exc:
+                            raise ValueError(
+                                "FASTA sequence name is not valid UTF-8"
+                            ) from exc
+                        if current_name in index:
+                            raise ValueError(
+                                f"Duplicate FASTA sequence name: {current_name}"
+                            )
+                        sequence_length = 0
+                        sequence_offset = None
+                        line_bases = None
+                        line_width = None
+                        terminal_line_seen = False
+                        continue
+
+                    if current_name is None:
+                        raise ValueError(
+                            "FASTA sequence data appears before the first header"
+                        )
+
+                    sequence_line = raw_line.rstrip(b"\r\n")
+                    if not sequence_line:
+                        raise ValueError(
+                            f"Blank FASTA sequence line for {current_name}"
+                        )
+                    if (
+                        any(byte <= 32 or byte > 126 for byte in sequence_line)
+                        or b">" in sequence_line
+                    ):
+                        raise ValueError(
+                            f"Invalid FASTA sequence line for {current_name}"
+                        )
+                    if terminal_line_seen:
+                        raise ValueError(
+                            f"Inconsistent FASTA line wrapping for {current_name}"
+                        )
+
+                    bases_on_line = len(sequence_line)
+                    if sequence_offset is None:
+                        sequence_offset = line_offset
+                        line_bases = bases_on_line
+                        line_width = len(raw_line)
+                    else:
+                        assert line_bases is not None
+                        assert line_width is not None
+                        if bases_on_line > line_bases:
+                            raise ValueError(
+                                f"Inconsistent FASTA line wrapping for {current_name}"
+                            )
+                        if bases_on_line < line_bases:
+                            terminal_line_seen = True
+                        elif len(raw_line) != line_width:
+                            if raw_line.endswith((b"\n", b"\r")):
+                                raise ValueError(
+                                    f"Inconsistent FASTA line endings for {current_name}"
+                                )
+                            terminal_line_seen = True
+
+                    sequence_length += bases_on_line
+
+                finish_record()
+        except OSError as exc:
+            raise OSError(f"Unable to read FASTA file: {self.fasta_path}") from exc
+
+        if not index:
+            raise ValueError(f"FASTA contains no sequences: {self.fasta_path}")
+        return index
+
+    def _cache_index(self) -> None:
+        """Atomically cache the in-memory index, continuing if the directory is read-only."""
+        index_dir = os.path.dirname(os.path.abspath(self.index_path)) or "."
+        temporary_path: Optional[str] = None
+        try:
+            fd, temporary_path = tempfile.mkstemp(
+                dir=index_dir,
+                prefix=f".{os.path.basename(self.index_path)}.",
+                suffix=".tmp",
+            )
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fai:
+                for chrom, values in self.index.items():
+                    fai.write(
+                        "\t".join([chrom, *(str(value) for value in values)])
+                        + "\n"
+                    )
+                fai.flush()
+                os.fsync(fai.fileno())
+            os.replace(temporary_path, self.index_path)
+            temporary_path = None
+        except OSError:
+            # The in-memory index remains fully usable when the FASTA directory
+            # cannot be written.
+            pass
+        finally:
+            if temporary_path:
+                try:
+                    os.unlink(temporary_path)
+                except OSError:
+                    pass
 
     @staticmethod
     def _alias_key(chrom: str) -> str:
@@ -334,14 +720,6 @@ class FastaReference:
         if not alias or chrom not in self.index:
             return
         self.alias_to_chrom.setdefault(self._alias_key(alias), chrom)
-
-    def _register_accession(self, accession: str, chrom: str) -> None:
-        accession = str(accession or "").strip()
-        if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*\.\d+", accession):
-            return
-        self._register_alias(accession, chrom)
-        if accession not in self.accessions_by_chrom[chrom]:
-            self.accessions_by_chrom[chrom].append(accession)
 
     def _build_aliases(self) -> None:
         for chrom in self.index:
@@ -379,11 +757,10 @@ class FastaReference:
                         header_text = header_text[1:]
                     first_token = header_text.split()[0] if header_text.split() else ""
                     self._register_alias(first_token, chrom)
-                    self.assemblies.update(re.findall(r"\bAS:([^\s]+)", header_text))
                     for accession in re.findall(r"\b[A-Z]{1,3}_?\d{5,}(?:\.\d+)?\b", header_text):
-                        self._register_accession(accession, chrom)
+                        self._register_alias(accession, chrom)
                     for accession in re.findall(r"\b[A-Za-z][A-Za-z0-9_]*:([A-Z]{1,3}_?\d{5,}(?:\.\d+)?)", header_text):
-                        self._register_accession(accession, chrom)
+                        self._register_alias(accession, chrom)
         except OSError:
             return
 
@@ -428,25 +805,14 @@ class FastaReference:
             return None
         return self.index[resolved][0]
 
-    def preferred_accession(self, chrom: str) -> Optional[str]:
-        """Return a versioned genomic accession suitable for HGVS g. notation."""
-        resolved = self.resolve_chrom(chrom)
-        if resolved is None:
-            return None
+    def close(self) -> None:
+        """Close the shared FASTA handle used by repeated interval fetches."""
+        if self._fasta_handle is not None:
+            self._fasta_handle.close()
+            self._fasta_handle = None
 
-        if any(assembly.lower().startswith("grch38") for assembly in self.assemblies):
-            for accession, grch38_chrom in self.GRCH38_REFSEQ_ALIASES.items():
-                if self.resolve_chrom(grch38_chrom) == resolved:
-                    return accession
-
-        candidates = list(self.accessions_by_chrom.get(resolved, []))
-        if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*\.\d+", resolved):
-            candidates.insert(0, resolved)
-        for prefix in ("NC_", "NG_", "NW_", "NT_"):
-            for accession in candidates:
-                if accession.startswith(prefix):
-                    return accession
-        return candidates[0] if candidates else None
+    def __del__(self):
+        self.close()
 
     def fetch(self, chrom: str, start: int, end: int) -> str:
         """Fetch 1-based inclusive sequence."""
@@ -458,18 +824,20 @@ class FastaReference:
         if start < 1 or end > length or start > end:
             raise ValueError(f"{chrom}:{start}-{end} is outside reference bounds")
 
+        if self._fasta_handle is None:
+            self._fasta_handle = open(self.fasta_path, "rb")
+        fasta = self._fasta_handle
         seq_parts: List[str] = []
-        with open(self.fasta_path, "rb") as fasta:
-            pos = start
-            while pos <= end:
-                zero_based = pos - 1
-                line_index = zero_based // line_bases
-                line_offset = zero_based % line_bases
-                bases_to_read = min(end - pos + 1, line_bases - line_offset)
-                byte_offset = offset + line_index * line_width + line_offset
-                fasta.seek(byte_offset)
-                seq_parts.append(fasta.read(bases_to_read).decode("ascii"))
-                pos += bases_to_read
+        pos = start
+        while pos <= end:
+            zero_based = pos - 1
+            line_index = zero_based // line_bases
+            line_offset = zero_based % line_bases
+            bases_to_read = min(end - pos + 1, line_bases - line_offset)
+            byte_offset = offset + line_index * line_width + line_offset
+            fasta.seek(byte_offset)
+            seq_parts.append(fasta.read(bases_to_read).decode("ascii"))
+            pos += bases_to_read
 
         return "".join(seq_parts).upper()
 
@@ -496,14 +864,13 @@ class KVarVCFParser:
         if reference_fasta_path:
             try:
                 self.reference = FastaReference(reference_fasta_path)
-            except FileNotFoundError as e:
-                error_code = ErrorCode.FASTA_INDEX_ERROR if str(e).endswith(".fai") else ErrorCode.FASTA_READ_ERROR
+            except ValueError as e:
                 self.error_handler.create_error(
-                    error_code,
+                    ErrorCode.FASTA_INDEX_ERROR,
                     additional_info={"file_path": reference_fasta_path, "error": str(e)}
                 )
                 raise
-            except Exception as e:
+            except OSError as e:
                 self.error_handler.create_error(
                     ErrorCode.FASTA_READ_ERROR,
                     additional_info={"file_path": reference_fasta_path, "error": str(e)}
@@ -968,7 +1335,7 @@ class KVarVCFParser:
                 field_name="ALT",
                 actual_value=alt
             )
-        elif alt and not self._is_valid_alt(alt):
+        elif alt and not self._is_valid_alt(alt, ref):
             self.error_handler.create_error(
                 ErrorCode.INVALID_REF_ALT,
                 line_number=line_number,
@@ -1008,11 +1375,11 @@ class KVarVCFParser:
             info=info_dict
         )
 
-    def _is_valid_alt(self, alt: str) -> bool:
+    def _is_valid_alt(self, alt: str, ref: Optional[str] = None) -> bool:
         """Validate one ALT allele for SV VCF syntax."""
         if alt.startswith("<") and alt.endswith(">"):
             return True
-        if self.breakend_parser.is_breakend_alt(alt):
+        if self.breakend_parser.is_breakend_alt(alt, ref):
             return True
         if alt.endswith(".") or alt.startswith("."):
             return bool(re.match(r'^[ACGTNacgtn]*\.$|^\.[ACGTNacgtn]*$', alt))
@@ -1213,7 +1580,7 @@ class KVarVCFParser:
         self._validate_ac_an(info_dict, line_number, variant_id)
 
         if is_bnd:
-            is_breakend = self.breakend_parser.is_breakend_alt(alt)
+            is_breakend = self.breakend_parser.is_breakend_alt(alt, ref)
             is_single_breakend = self.breakend_parser.is_single_breakend_alt(alt, ref)
             if not is_breakend and not is_single_breakend:
                 self.error_handler.create_error(
@@ -1225,9 +1592,30 @@ class KVarVCFParser:
                 )
             mateid = info_dict.get("MATEID")
             if mateid:
-                for mate in str(mateid).split(","):
-                    mate = mate.strip()
-                    if mate and mate != ".":
+                mate_ids = self._split_info_values(mateid)
+                if "," in alt:
+                    # MULTIALLELIC_ALT already blocks this unsupported shape.
+                    pass
+                elif len(mate_ids) > 1:
+                    self.error_handler.create_error(
+                        ErrorCode.MULTIPLE_MATEIDS_UNSUPPORTED,
+                        line_number=line_number,
+                        variant_id=variant_id,
+                        field_name="MATEID",
+                        expected_value="one MATEID for one BND ALT",
+                        actual_value=",".join(mate_ids),
+                    )
+                elif variant_id and mate_ids and mate_ids[0] == variant_id:
+                    self.error_handler.create_error(
+                        ErrorCode.MATEID_SELF_REFERENCE,
+                        line_number=line_number,
+                        variant_id=variant_id,
+                        field_name="MATEID",
+                        expected_value="ID of a different BND record",
+                        actual_value=mate_ids[0],
+                    )
+                else:
+                    for mate in mate_ids:
                         self._bnd_mate_refs.append((line_number, variant_id or ".", mate))
 
     @staticmethod
@@ -1250,8 +1638,10 @@ class KVarVCFParser:
         """Derive END for records that omit it, following DDBJ/VCF behavior."""
         if svtype == "BND":
             return None
+        if svtype == "INS":
+            return pos
         alt_text = str(alt or "")
-        if re.fullmatch(r"[ATGCNatgcn]+", alt_text) or svtype == "INS":
+        if re.fullmatch(r"[ATGCNatgcn]+", alt_text):
             return pos + len(ref or "") + 1
         if svtype in {"DEL", "DUP", "INV", "CNV"}:
             svlen_value = KVarVCFParser._first_integer_value(svlen)
@@ -1584,28 +1974,182 @@ class KVarVCFParser:
                     actual_value=str(mate_row.info.get("MATEID", "."))
                 )
 
+        for row in self.data_rows:
+            self._validate_row_coordinate_bounds(row)
+
+    def _coordinate_source(
+        self,
+        chrom: str,
+    ) -> Tuple[Optional[str], Optional[str], Optional[int]]:
+        """Return source, resolved contig, and length for coordinate checks."""
+        if self.reference:
+            resolved_chrom = self.reference.resolve_chrom(chrom)
+            length = (
+                self.reference.length(resolved_chrom)
+                if resolved_chrom is not None
+                else None
+            )
+            return "reference FASTA", resolved_chrom, length
+
         if self.header.contig_fields:
-            for row in self.data_rows:
-                resolved_chrom = self._resolve_header_contig(row.chrom)
-                if resolved_chrom:
-                    length = self.header.contig_fields[resolved_chrom].get("length")
-                    if length and row.pos > int(length):
-                        self.error_handler.create_error(
-                            ErrorCode.POSITION_OUT_OF_RANGE,
-                            variant_id=row.id if row.id != "." else None,
-                            field_name="POS",
-                            expected_value=f"<= {length}",
-                            actual_value=f"{row.chrom}:{row.pos}",
-                            additional_info={"resolved_chrom": resolved_chrom}
-                        )
-                else:
-                    self.error_handler.create_error(
-                        ErrorCode.CHROMOSOME_NOT_FOUND,
-                        variant_id=row.id if row.id != "." else None,
-                        field_name="CHROM",
-                        actual_value=row.chrom,
-                        additional_info={"source": "VCF contig header"}
-                    )
+            resolved_chrom = self._resolve_header_contig(chrom)
+            if resolved_chrom is None:
+                return "VCF contig header", None, None
+            raw_length = self.header.contig_fields[resolved_chrom].get("length")
+            return (
+                "VCF contig header",
+                resolved_chrom,
+                int(raw_length) if raw_length else None,
+            )
+
+        return None, None, None
+
+    def _validate_row_coordinate_bounds(self, row: VCFDataRow) -> None:
+        """Validate coordinates that will be represented in the Call TSV."""
+        variant_id = row.id if row.id != "." else None
+        source, resolved_chrom, chrom_length = self._coordinate_source(row.chrom)
+        if source is None:
+            return
+
+        # Reference-backed POS/REF validation already reports local chromosome
+        # and position errors while parsing the row. Without a reference, use
+        # the VCF contig declarations as the local coordinate authority.
+        if self.reference is None:
+            if resolved_chrom is None:
+                self.error_handler.create_error(
+                    ErrorCode.CHROMOSOME_NOT_FOUND,
+                    variant_id=variant_id,
+                    field_name="CHROM",
+                    actual_value=row.chrom,
+                    additional_info={"source": source},
+                )
+            else:
+                ref_length = (
+                    len(row.ref)
+                    if row.ref and row.ref != "."
+                    else 1
+                )
+                ref_end = row.pos + ref_length - 1
+            if (
+                resolved_chrom is not None
+                and chrom_length is not None
+                and ref_end > chrom_length
+            ):
+                self.error_handler.create_error(
+                    ErrorCode.POSITION_OUT_OF_RANGE,
+                    variant_id=variant_id,
+                    field_name="POS/REF",
+                    expected_value=f"1-{chrom_length}",
+                    actual_value=f"{row.chrom}:{row.pos}-{ref_end}",
+                    additional_info={
+                        "source": source,
+                        "resolved_chrom": resolved_chrom,
+                    },
+                )
+
+        self.validate_effective_end_bounds(
+            row.chrom,
+            row.pos,
+            row.ref,
+            row.alt,
+            row.info,
+            None,
+            variant_id,
+        )
+
+        if (
+            row.info.get("SVTYPE") == "BND"
+            and self.breakend_parser.is_breakend_alt(row.alt, row.ref)
+        ):
+            _, remote_chrom, remote_pos_text, _ = (
+                self.breakend_parser.parse_breakend_placement(row.alt)
+            )
+            remote_source, resolved_remote, remote_length = (
+                self._coordinate_source(remote_chrom)
+            )
+            if remote_source is None:
+                return
+            if resolved_remote is None:
+                self.error_handler.create_error(
+                    ErrorCode.CHROMOSOME_NOT_FOUND,
+                    variant_id=variant_id,
+                    field_name="ALT remote CHROM",
+                    actual_value=remote_chrom,
+                    additional_info={"source": remote_source},
+                )
+                return
+
+            remote_pos = int(remote_pos_text)
+            # VCF permits a breakend target immediately after the last base to
+            # represent the right telomere.
+            remote_max = remote_length + 1 if remote_length is not None else None
+            if remote_max is not None and remote_pos > remote_max:
+                self.error_handler.create_error(
+                    ErrorCode.POSITION_OUT_OF_RANGE,
+                    variant_id=variant_id,
+                    field_name="ALT remote coordinate",
+                    expected_value=f"1-{remote_max}",
+                    actual_value=f"{remote_chrom}:{remote_pos}",
+                    additional_info={
+                        "source": remote_source,
+                        "resolved_chrom": resolved_remote,
+                        "telomere_allowance": "contig length + 1",
+                    },
+                )
+
+    def validate_effective_end_bounds(
+        self,
+        chrom: str,
+        pos: int,
+        ref: str,
+        alt: str,
+        info: Dict[str, Any],
+        line_number: Optional[int],
+        variant_id: Optional[str],
+        coordinate_origin: Optional[str] = None,
+    ) -> None:
+        """Validate the END written to TSV without comparing it with SVLEN."""
+        svtype = info.get("SVTYPE")
+        if svtype == "BND":
+            return
+
+        submitted_end = info.get("END")
+        if submitted_end is not None and not isinstance(submitted_end, int):
+            return
+
+        effective_end = submitted_end
+        derived = False
+        if effective_end is None:
+            effective_end = self.derive_missing_end(
+                svtype,
+                pos,
+                ref,
+                alt,
+                info.get("SVLEN"),
+            )
+            derived = effective_end is not None
+        if effective_end is None:
+            return
+
+        source, resolved_chrom, chrom_length = self._coordinate_source(chrom)
+        if source is None or resolved_chrom is None or chrom_length is None:
+            return
+        if effective_end > chrom_length:
+            self.error_handler.create_error(
+                ErrorCode.POSITION_OUT_OF_RANGE,
+                line_number=line_number,
+                variant_id=variant_id,
+                field_name="derived END" if derived and not coordinate_origin else "END",
+                expected_value=f"1-{chrom_length}",
+                actual_value=f"{chrom}:{effective_end}",
+                additional_info={
+                    "source": source,
+                    "resolved_chrom": resolved_chrom,
+                    "coordinate": coordinate_origin or (
+                        "derived END" if derived else "submitted END"
+                    ),
+                },
+            )
 
     def _resolve_header_contig(self, chrom: str) -> Optional[str]:
         chrom = str(chrom or "").strip()

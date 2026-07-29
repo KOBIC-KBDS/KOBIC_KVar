@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Public CLI for converting an SV VCF submission to Variant_Call TSV."""
+"""Public CLI for converting an SV VCF submission to a Call TSV."""
 
 import argparse
 import os
@@ -7,16 +7,18 @@ import sys
 
 try:
     from .KVar2TSV import KVarTSVConverter
+    from .error_handler import ErrorCode, ErrorHandler
 except ImportError:
     from KVar2TSV import KVarTSVConverter
+    from error_handler import ErrorCode, ErrorHandler
 
 
 def default_call_tsv_path(vcf_path: str) -> str:
     """Return the default Call TSV path beside the input VCF."""
     for suffix in (".vcf.gz", ".vcf"):
         if vcf_path.endswith(suffix):
-            return vcf_path[: -len(suffix)] + ".Variant_Call.tsv"
-    return vcf_path + ".Variant_Call.tsv"
+            return vcf_path[: -len(suffix)] + ".call.tsv"
+    return vcf_path + ".call.tsv"
 
 
 def default_error_report_path(call_tsv_path: str) -> str:
@@ -74,19 +76,19 @@ def _validate_call_tsv_suffix(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Validate an SV VCF file and convert it to a KVar Variant_Call TSV file.",
+        description="Validate an SV VCF file and convert it to a KVar submission Call TSV file.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("-v", "--vcf", required=True, help="Input SV VCF path (.gz supported)")
     parser.add_argument(
         "-r",
         "--reference",
-        help="Optional reference FASTA for CHROM/POS/REF validation; .fai index is required when used",
+        help="Optional reference FASTA for chromosome, coordinate, and REF validation; its .fai index is created automatically",
     )
     parser.add_argument(
         "-t",
         "--call-tsv",
-        help="Optional output Variant_Call TSV path; derived from the input when omitted",
+        help="Optional output Call TSV path; derived from the input when omitted",
     )
     parser.add_argument(
         "-e",
@@ -108,16 +110,48 @@ def main(argv=None) -> int:
 
     if not os.path.exists(args.vcf):
         parser.error(f"VCF file not found: {args.vcf}")
-    if args.reference and not os.path.exists(args.reference):
-        parser.error(f"reference FASTA file not found: {args.reference}")
 
-    converter = KVarTSVConverter(reference_fasta_path=args.reference)
-    converter.convert_vcf_to_tsv(
-        args.vcf,
-        args.call_tsv,
-        error_report_path=args.error_report,
-    )
-    print(f"Variant_Call TSV: {args.call_tsv}")
+    error_handler = ErrorHandler()
+    try:
+        converter = KVarTSVConverter(
+            error_handler=error_handler,
+            reference_fasta_path=args.reference,
+        )
+    except Exception as exc:
+        if not error_handler.has_errors():
+            error_handler.create_error(
+                ErrorCode.FASTA_READ_ERROR,
+                additional_info={
+                    "file_path": args.reference,
+                    "error": str(exc),
+                },
+            )
+        try:
+            error_handler.generate_report(
+                args.error_report,
+                vcf_file_path=args.vcf,
+                output_tsv_path=args.call_tsv,
+            )
+        except Exception as report_exc:
+            print(
+                f"Reference initialization failed and the validation report "
+                f"could not be written: {report_exc}",
+                file=sys.stderr,
+            )
+        print(f"Reference initialization failed: {exc}", file=sys.stderr)
+        return 1
+
+    try:
+        converter.convert_vcf_to_tsv(
+            args.vcf,
+            args.call_tsv,
+            error_report_path=args.error_report,
+        )
+    except Exception as exc:
+        print(f"Conversion failed: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"Call TSV: {args.call_tsv}")
     print(f"Validation report: {args.error_report}")
     return 0
 

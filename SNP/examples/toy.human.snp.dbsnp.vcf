@@ -12,4 +12,4 @@
 ##FORMAT=<ID=FRQ,Number=.,Type=Float,Description="Frequency of each alternate allele">
 ##population_id=POP1
 #CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	POP1
-chr1	2	var1	C	T	.	PASS	VRT=1;AC=2;AN=10;AF=0.2	NA:FRQ	10:0.2
+chr1	2	human_snp1	C	T	.	PASS	VRT=1;AC=2;AN=10;AF=0.2	NA:FRQ	10:0.2

@@ -12,12 +12,62 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 CLI = ROOT / "src" / "kvar_sv_tools" / "vcf_to_kvar_tsv.py"
 EXAMPLE_VCF = ROOT / "examples" / "toy.human.sv.vcf"
-EXAMPLE_REFERENCE = ROOT / "examples" / "toy.human.GRCh38.fa"
+EXAMPLE_REFERENCE = ROOT / "examples" / "toy.human.sv.reference.fasta"
 sys.path.insert(0, str(ROOT / "src"))
+
+EXPECTED_SUBMISSION_CALL_HEADER = [
+    "Variant_Call_ID",
+    "Variant_Call_Type",
+    "Chr",
+    "Outer_Start",
+    "Start",
+    "Inner_Start",
+    "Inner_Stop",
+    "Stop",
+    "Outer_Stop",
+    "Insertion_Length",
+    "Allele_Count",
+    "Allele_Frequency",
+    "Allele_Number",
+    "Copy_Number",
+    "Description",
+    "Validation",
+    "Zygosity",
+    "Origin",
+    "Phenotype",
+    "External_Links",
+    "Evidence",
+    "Sequence",
+    "From_Chr",
+    "From_Coord",
+    "From_Strand",
+    "To_Chr",
+    "To_Coord",
+    "To_Strand",
+    "Mutation_ID",
+    "Mutation_Order",
+    "Mutation_Molecule",
+    "BND_Source_VCF_IDs",
+]
 
 
 def write_text(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
+
+
+def assert_submission_call_schema(text: str):
+    lines = text.splitlines()
+    header = next(
+        line.lstrip("#").split("\t")
+        for line in lines
+        if line.startswith("#") and not line.startswith("##")
+    )
+    rows = [line.split("\t") for line in lines if line and not line.startswith("#")]
+
+    assert header == EXPECTED_SUBMISSION_CALL_HEADER
+    assert len(header) == 32
+    assert all(len(row) == len(header) for row in rows)
+    return header, rows
 
 
 def main() -> None:
@@ -52,24 +102,27 @@ def main() -> None:
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)
-        reference = tmp / "toy.fa"
-        reference_index = tmp / "toy.fa.fai"
+        reference = tmp / "toy.fasta"
+        reference_index = tmp / "toy.fasta.fai"
         vcf = tmp / "input.vcf"
-        call_tsv = tmp / "Variant_Call.tsv"
+        call_tsv = tmp / "submission.call.tsv"
         errors = tmp / "validation_report.txt"
         automatic_vcf = tmp / "automatic.vcf"
-        automatic_call_tsv = tmp / "automatic.Variant_Call.tsv"
-        automatic_errors = tmp / "automatic.Variant_Call.errors.txt"
+        automatic_call_tsv = tmp / "automatic.call.tsv"
+        automatic_errors = tmp / "automatic.call.errors.txt"
         invalid_vcf = tmp / "invalid_ref.vcf"
-        invalid_call_tsv = tmp / "invalid.Variant_Call.tsv"
+        invalid_call_tsv = tmp / "invalid.call.tsv"
         invalid_errors = tmp / "invalid.validation_report.txt"
-        unchecked_call_tsv = tmp / "unchecked.Variant_Call.tsv"
+        unchecked_call_tsv = tmp / "unchecked.call.tsv"
         unchecked_errors = tmp / "unchecked.validation_report.txt"
         ignored_context_vcf = tmp / "ignored_context.vcf"
-        ignored_context_call_tsv = tmp / "ignored_context.Variant_Call.tsv"
+        ignored_context_call_tsv = tmp / "ignored_context.call.tsv"
         ignored_context_errors = tmp / "ignored_context.validation_report.txt"
-        report_failure_call_tsv = tmp / "report_failure.Variant_Call.tsv"
+        report_failure_call_tsv = tmp / "report_failure.call.tsv"
         missing_report = tmp / "missing" / "validation_report.txt"
+        insertion_without_end_vcf = tmp / "insertion_without_end.vcf"
+        insertion_without_end_tsv = tmp / "insertion_without_end.call.tsv"
+        insertion_without_end_errors = tmp / "insertion_without_end.errors.txt"
 
         sequence = "A" * 200
         reference_header = ">chr1 AC:CM000663.2 AS:GRCh38\n"
@@ -90,6 +143,13 @@ def main() -> None:
         write_text(
             invalid_vcf,
             vcf.read_text(encoding="utf-8").replace("\tsv1\tA\t", "\tsv_bad\tC\t"),
+        )
+        write_text(
+            insertion_without_end_vcf,
+            vcf.read_text(encoding="utf-8").replace(
+                "chr1\t20\tsv1\tA\t<DEL>\t.\tPASS\tSVTYPE=DEL;END=30;SVLEN=-10;AC=1;AN=2\n",
+                "chr1\t20\tins_without_end\tA\t<INS>\t.\tPASS\tSVTYPE=INS;SVLEN=12\n",
+            ),
         )
         shutil.copyfile(vcf, automatic_vcf)
         write_text(
@@ -161,24 +221,36 @@ def main() -> None:
         call_text = call_tsv.read_text(encoding="utf-8")
         report_text = errors.read_text(encoding="utf-8")
 
-        call_header = next(
-            line.lstrip("#").split("\t")
-            for line in call_text.splitlines()
-            if line.startswith("#") and not line.startswith("##")
-        )
+        call_header, call_rows = assert_submission_call_schema(call_text)
 
         assert "Variant_Call_ID" in call_header
         assert "Variant_Call_Type" in call_header
         assert "Outer_Start" in call_header
-        assert "HGVSG" in call_header
+        assert "BND_Source_VCF_IDs" in call_header
+        assert "Submitted_Variant_Call_IDs" not in call_header
         assert "Variant Call ID" not in call_header
+        assert call_rows
+        call_row = dict(zip(call_header, call_rows[0]))
+        assert call_row["BND_Source_VCF_IDs"] == "."
         assert "sv1" in call_text
         assert "kssv" not in call_text
-        assert "NC_000001.11:g.20_30del" in call_text
         assert "KVar SV Validation Report" in report_text
         assert "=== Validation Summary ===" in report_text
         assert "Total issues: 0" in report_text
         assert "No issues." in report_text
+
+        KVarTSVConverter().convert_vcf_to_tsv(
+            str(insertion_without_end_vcf),
+            str(insertion_without_end_tsv),
+            str(insertion_without_end_errors),
+        )
+        insertion_header, insertion_rows = assert_submission_call_schema(
+            insertion_without_end_tsv.read_text(encoding="utf-8")
+        )
+        insertion_row = dict(zip(insertion_header, insertion_rows[0]))
+        assert insertion_row["Variant_Call_Type"] == "insertion"
+        assert insertion_row["Start"] == "20"
+        assert insertion_row["Stop"] == "20"
 
         automatic_result = subprocess.run(
             [
@@ -376,7 +448,7 @@ def main() -> None:
                 "--reference",
                 str(reference),
                 "--call-tsv",
-                str(tmp / "accession.Variant_Call.tsv"),
+                str(tmp / "accession.call.tsv"),
                 "--error-report",
                 str(tmp / "accession.validation_report.txt"),
                 "--call-accession-start",
@@ -400,7 +472,7 @@ def main() -> None:
                 "--reference",
                 str(reference),
                 "--call-tsv",
-                str(tmp / "metadata.Variant_Call.tsv"),
+                str(tmp / "metadata.call.tsv"),
                 "--error-report",
                 str(tmp / "metadata.validation_report.txt"),
                 "--metadata",
@@ -415,7 +487,7 @@ def main() -> None:
         assert metadata_result.returncode != 0
         assert "unrecognized arguments: --metadata" in metadata_result.stderr
 
-        example_call_tsv = tmp / "example.Variant_Call.tsv"
+        example_call_tsv = tmp / "example.call.tsv"
         example_errors = tmp / "example.validation_report.txt"
         example_result = subprocess.run(
             [
@@ -444,12 +516,22 @@ def main() -> None:
             )
 
         example_text = example_call_tsv.read_text(encoding="utf-8")
-        example_rows = [line for line in example_text.splitlines() if not line.startswith("#")]
+        example_header, example_rows = assert_submission_call_schema(example_text)
+        example_calls = {
+            row["Variant_Call_ID"]: row
+            for row in (dict(zip(example_header, fields)) for fields in example_rows)
+        }
         assert len(example_rows) == 5
         assert "human_del1" in example_text
-        assert "human_bnd1,human_bnd2" in example_text
+        assert example_calls["human_del1"]["BND_Source_VCF_IDs"] == "."
+        assert example_calls["human_ins1"]["BND_Source_VCF_IDs"] == "."
+        assert example_calls["human_dup1"]["BND_Source_VCF_IDs"] == "."
+        assert example_calls["human_inv1"]["BND_Source_VCF_IDs"] == "."
+        assert (
+            example_calls["human_bnd1"]["BND_Source_VCF_IDs"]
+            == "human_bnd1,human_bnd2"
+        )
         assert "kssv" not in example_text
-        assert "NC_000001.11:g." in example_text
         example_report = example_errors.read_text(encoding="utf-8")
         assert "Total issues: 0" in example_report
         assert "No issues." in example_report

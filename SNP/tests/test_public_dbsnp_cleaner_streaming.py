@@ -9,7 +9,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
-METADATA = ROOT / "examples" / "toy.metadata.txt"
+METADATA = ROOT / "examples" / "toy.human.snp.metadata.txt"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
@@ -147,7 +147,7 @@ def test_generic_converter_publishes_output_atomically(tmp_path: Path) -> None:
 
     try:
         FailingConverter().convert_vcf_to_dbsnp(
-            str(ROOT / "examples" / "toy.generic.vcf"),
+            str(ROOT / "examples" / "toy.human.snp.generic.vcf"),
             str(output_vcf),
             metadata_file_path=str(METADATA),
             error_report_path=str(error_report),
@@ -167,7 +167,7 @@ def test_generic_converter_preserves_gzip_output(tmp_path: Path) -> None:
     error_report = tmp_path / "generic.atomic-gzip.errors.txt"
 
     VCF2dbSNPConverter().convert_vcf_to_dbsnp(
-        str(ROOT / "examples" / "toy.generic.vcf"),
+        str(ROOT / "examples" / "toy.human.snp.generic.vcf"),
         str(output_vcf),
         metadata_file_path=str(METADATA),
         error_report_path=str(error_report),

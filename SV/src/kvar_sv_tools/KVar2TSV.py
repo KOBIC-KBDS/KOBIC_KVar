@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 KVar SV VCF to TSV converter.
-Converts KVar SV VCF files to Variant_Call.tsv format.
+Converts KVar SV VCF files to submission Call TSV format.
 """
 
 import sys
@@ -14,71 +14,49 @@ import tempfile
 from typing import Dict, List, Optional, Any, Tuple
 from collections import defaultdict
 
-CALL_SUBMITTED_IDS_FIELD = "Submitted_Variant_Call_IDs"
-HGVSG_FIELD = "HGVSG"
-
-CALL_INTERNAL_TSV_HEADER = [
-    "Variant Call ID",
-    "Variant Call Type",
+CALL_TSV_HEADER = [
+    "Variant_Call_ID",
+    "Variant_Call_Type",
     "Chr",
-    "Outer Start",
+    "Outer_Start",
     "Start",
-    "Inner Start",
-    "Inner Stop",
+    "Inner_Start",
+    "Inner_Stop",
     "Stop",
-    "Outer Stop",
-    "Insertion Length",
-    "Allele Count",
-    "Allele Frequency",
-    "Allele Number",
-    "Copy Number",
+    "Outer_Stop",
+    "Insertion_Length",
+    "Allele_Count",
+    "Allele_Frequency",
+    "Allele_Number",
+    "Copy_Number",
     "Description",
     "Validation",
     "Zygosity",
     "Origin",
     "Phenotype",
-    HGVSG_FIELD,
-    "External Links",
+    "External_Links",
     "Evidence",
     "Sequence",
-    "From Chr",
-    "From Coord",
-    "From Strand",
-    "To Chr",
-    "To Coord",
-    "To Strand",
-    "Mutation ID",
-    "Mutation Order",
-    "Mutation Molecule",
-    CALL_SUBMITTED_IDS_FIELD,
+    "From_Chr",
+    "From_Coord",
+    "From_Strand",
+    "To_Chr",
+    "To_Coord",
+    "To_Strand",
+    "Mutation_ID",
+    "Mutation_Order",
+    "Mutation_Molecule",
+    "BND_Source_VCF_IDs",
 ]
-CALL_TSV_HEADER = [field.replace(" ", "_") for field in CALL_INTERNAL_TSV_HEADER]
-CALL_FIELD_ALIASES = {
-    output_field: internal_field
-    for internal_field, output_field in zip(CALL_INTERNAL_TSV_HEADER, CALL_TSV_HEADER)
-}
-CALL_FIELD_ALIASES.update({field: field for field in CALL_INTERNAL_TSV_HEADER})
-CALL_FIELD_ALIASES.update({
-    "HGVSg": HGVSG_FIELD,
-    "hgvs_name": HGVSG_FIELD,
-})
-
-
-def normalize_call_field_name(field: str) -> str:
-    """Return the internal call TSV field name for public or legacy headers."""
-    clean_field = str(field or "").strip()
-    return CALL_FIELD_ALIASES.get(clean_field, clean_field)
 
 
 # Relative path import support
 try:
     from .VCF_parser import KVarVCFParser, VCFDataRow, SVClassifier, BreakendParser
     from .error_handler import ErrorHandler, ErrorCode
-    from .sv_type_ontology import normalize_call_type
 except ImportError:
     from VCF_parser import KVarVCFParser, VCFDataRow, SVClassifier, BreakendParser
     from error_handler import ErrorHandler, ErrorCode
-    from sv_type_ontology import normalize_call_type
 
 
 class _OutputTransaction:
@@ -139,27 +117,6 @@ def _xref_pattern(databases: Tuple[str, ...]) -> re.Pattern:
 
 PHENOTYPE_XREF_RE = _xref_pattern(PHENOTYPE_XREF_DBS)
 ALL_XREF_RE = _xref_pattern(ALL_XREF_DBS)
-
-HGVSG_RE = re.compile(r"^([A-Za-z][A-Za-z0-9_]*\.\d+):g\.(\S+)$")
-HGVSG_DELETION_TYPES = {
-    "alu deletion",
-    "copy number loss",
-    "deletion",
-    "herv deletion",
-    "line1 deletion",
-    "mobile element deletion",
-    "sva deletion",
-}
-HGVSG_DUPLICATION_TYPES = {"copy number gain", "duplication", "tandem duplication"}
-HGVSG_INSERTION_TYPES = {
-    "alu insertion",
-    "herv insertion",
-    "insertion",
-    "line1 insertion",
-    "mobile element insertion",
-    "novel sequence insertion",
-    "sva insertion",
-}
 
 
 def _clean_tsv_value(value: Optional[str]) -> Optional[str]:
@@ -226,136 +183,8 @@ def _validate_sequence_and_reference_fields(
         )
 
 
-def _clean_hgvsg_value(value: Any) -> str:
-    values = value if isinstance(value, list) else [value]
-    for item in values:
-        text = str(item or "").strip()
-        if text and text != ".":
-            return text
-    return ""
-
-
-def _positive_coordinate(row: Dict[str, Any], field: str) -> Optional[int]:
-    value = str(row.get(field, "") or "").strip()
-    if not value or value == ".":
-        return None
-    try:
-        coordinate = int(value)
-    except (TypeError, ValueError):
-        return None
-    return coordinate if coordinate >= 1 else None
-
-
-def _hgvsg_start_boundary(row: Dict[str, Any]) -> Optional[str]:
-    outer = _positive_coordinate(row, "Outer Start")
-    inner = _positive_coordinate(row, "Inner Start")
-    if outer is not None or inner is not None:
-        return f"({outer if outer is not None else '?'}_{inner if inner is not None else '?'})"
-    exact = _positive_coordinate(row, "Start")
-    return str(exact) if exact is not None else None
-
-
-def _hgvsg_stop_boundary(row: Dict[str, Any]) -> Optional[str]:
-    inner = _positive_coordinate(row, "Inner Stop")
-    outer = _positive_coordinate(row, "Outer Stop")
-    if inner is not None or outer is not None:
-        return f"({inner if inner is not None else '?'}_{outer if outer is not None else '?'})"
-    exact = _positive_coordinate(row, "Stop")
-    return str(exact) if exact is not None else None
-
-
-def _hgvsg_interval(row: Dict[str, Any]) -> Optional[str]:
-    start = _hgvsg_start_boundary(row)
-    stop = _hgvsg_stop_boundary(row)
-    if start is None or stop is None:
-        return None
-    return start if start == stop and not start.startswith("(") else f"{start}_{stop}"
-
-
-def _hgvsg_insertion_site(row: Dict[str, Any]) -> Optional[str]:
-    start = _hgvsg_start_boundary(row)
-    stop = _hgvsg_stop_boundary(row)
-    if start and start.startswith("("):
-        return start
-    if stop and stop.startswith("("):
-        return stop
-    exact = _positive_coordinate(row, "Start") or _positive_coordinate(row, "Stop")
-    if exact is None:
-        return None
-    return f"{exact}_{exact + 1}"
-
-
-def _hgvsg_insertion_payload(row: Dict[str, Any]) -> str:
-    sequence = str(row.get("Sequence", "") or "").strip().upper()
-    if sequence and sequence != "." and re.fullmatch(r"[ACGTBDHKMNRSVWY]+", sequence):
-        return sequence
-    length = _positive_coordinate(row, "Insertion Length")
-    return f"N[{length}]" if length is not None else "N[?]"
-
-
-def build_hgvsg(row: Dict[str, Any], reference: Any) -> str:
-    """Build a conservative genomic HGVS expression from a normalized call row."""
-    if reference is None:
-        return "."
-    call_type = normalize_call_type(row.get("Variant Call Type", ""))
-    chrom = str(row.get("Chr", "") or "").strip()
-    accession = reference.preferred_accession(chrom) if chrom and chrom != "." else None
-    if not accession:
-        return "."
-
-    if call_type in HGVSG_INSERTION_TYPES:
-        site = _hgvsg_insertion_site(row)
-        return f"{accession}:g.{site}ins{_hgvsg_insertion_payload(row)}" if site else "."
-
-    interval = _hgvsg_interval(row)
-    if not interval:
-        return "."
-    if call_type in HGVSG_DELETION_TYPES:
-        operation = "del"
-    elif call_type in HGVSG_DUPLICATION_TYPES:
-        operation = "dup"
-    elif call_type == "inversion":
-        operation = "inv"
-    else:
-        return "."
-    return f"{accession}:g.{interval}{operation}"
-
-
-def resolve_hgvsg(
-    submitted_value: Any,
-    row: Dict[str, Any],
-    reference: Any,
-    error_handler: ErrorHandler,
-    *,
-    variant_id: Optional[str] = None,
-    line_number: Optional[int] = None,
-    line_content: Optional[str] = None,
-) -> str:
-    """Preserve a valid submitted HGVSG or derive one from normalized placement."""
-    submitted = _clean_hgvsg_value(submitted_value)
-    if submitted:
-        match = HGVSG_RE.fullmatch(submitted)
-        valid = match is not None
-        if valid and reference is not None:
-            expected_chrom = reference.resolve_chrom(row.get("Chr", ""))
-            submitted_chrom = reference.resolve_chrom(match.group(1))
-            valid = expected_chrom is not None and submitted_chrom == expected_chrom
-        if valid:
-            return submitted
-        error_handler.create_error(
-            ErrorCode.INVALID_HGVSG,
-            line_number=line_number,
-            variant_id=variant_id,
-            line_content=line_content,
-            field_name=HGVSG_FIELD,
-            expected_value="<versioned genomic accession>:g.<HGVS description> on the call chromosome",
-            actual_value=submitted,
-        )
-    return build_hgvsg(row, reference)
-
-
 class KVarTSVConverter:
-    """Convert KVar SV VCF to Variant_Call.tsv format"""
+    """Convert KVar SV VCF to submission Call TSV format"""
 
     def __init__(
         self,
@@ -393,6 +222,9 @@ class KVarTSVConverter:
                         output_file_path,
                     )
                 raise
+        finally:
+            if self.parser.reference is not None:
+                self.parser.reference.close()
 
         # Build ID map and BND grouping
         id_map = self._build_id_map()
@@ -569,7 +401,68 @@ class KVarTSVConverter:
     def _bnd_inserted_sequence(self, row: VCFDataRow) -> str:
         if row.info.get("SVTYPE", "") != "BND":
             return ""
-        return self.breakend_parser.inserted_sequence(row.alt, row.ref)
+        return self.breakend_parser.inserted_sequence(row.alt, row.ref).upper()
+
+    @staticmethod
+    def _reverse_complement(sequence: str) -> str:
+        return sequence.upper().translate(str.maketrans("ACGTN", "TGCAN"))[::-1]
+
+    def _mate_inserted_sequence_in_row_orientation(
+        self,
+        row: VCFDataRow,
+        mate_row: VCFDataRow,
+        mate_sequence: str,
+    ) -> str:
+        if not mate_sequence:
+            return ""
+
+        row_from_strand = self.breakend_parser.parse_breakend_placement(row.alt)[0]
+        mate_from_strand = self.breakend_parser.parse_breakend_placement(mate_row.alt)[0]
+        if row_from_strand == mate_from_strand:
+            return self._reverse_complement(mate_sequence)
+        return mate_sequence
+
+    @staticmethod
+    def _bnd_pair_sort_key(row: VCFDataRow) -> Tuple[str, int, str]:
+        """Return the stable key used to select a reciprocal pair's primary row."""
+        row_id = row.id if row.id and row.id != "." else ""
+        return str(row.chrom), int(row.pos), row_id
+
+    def _record_one_sided_mate_insertion(
+        self,
+        row: VCFDataRow,
+        mate_row: VCFDataRow,
+        row_sequence: str,
+        mate_sequence: str,
+    ) -> None:
+        self.error_handler.create_error(
+            ErrorCode.MATEID_INSERTION_SEQUENCE_ONE_SIDED,
+            variant_id=row.id if row.id and row.id != "." else None,
+            field_name="ALT/MATEID inserted sequence",
+            expected_value="equivalent inserted sequence in both reciprocal breakend ALTs",
+            actual_value=(
+                f"{row.id}={'present' if row_sequence else 'missing'}, "
+                f"{mate_row.id}={'present' if mate_sequence else 'missing'}"
+            ),
+        )
+
+    def _record_mate_insertion_mismatch(
+        self,
+        row: VCFDataRow,
+        mate_row: VCFDataRow,
+        row_sequence: str,
+        mate_sequence: str,
+    ) -> None:
+        self.error_handler.create_error(
+            ErrorCode.MATEID_INSERTION_SEQUENCE_MISMATCH,
+            variant_id=row.id if row.id and row.id != "." else None,
+            field_name="ALT/MATEID inserted sequence",
+            expected_value=f"{row.id} inserted sequence {row_sequence}",
+            actual_value=(
+                f"{mate_row.id} inserted sequence in {row.id} orientation "
+                f"{mate_sequence}"
+            ),
+        )
 
     def _bnd_split_mutation_id(self, row: VCFDataRow, inserted_sequence: str) -> Optional[str]:
         if not inserted_sequence:
@@ -595,7 +488,7 @@ class KVarTSVConverter:
         info["SVLEN"] = len(sequence)
         info["SVINSSEQ"] = sequence
         info.pop("MATEID", None)
-        return VCFDataRow(
+        synthetic_row = VCFDataRow(
             chrom=source_row.chrom,
             pos=source_row.pos,
             id=synthetic_id,
@@ -605,6 +498,17 @@ class KVarTSVConverter:
             filter=source_row.filter,
             info=info,
         )
+        self.parser.validate_effective_end_bounds(
+            synthetic_row.chrom,
+            synthetic_row.pos,
+            synthetic_row.ref,
+            synthetic_row.alt,
+            synthetic_row.info,
+            None,
+            synthetic_id,
+            coordinate_origin="converter-derived BND insertion END",
+        )
+        return synthetic_row
 
     def _build_call_records(self, id_map: Dict[str, int]) -> List[Dict[str, Any]]:
         """Build output call records, collapsing reciprocal BND MATEID pairs."""
@@ -618,21 +522,20 @@ class KVarTSVConverter:
             if row_id in absorbed_ids:
                 continue
 
-            submitted_ids = [row_id]
+            bnd_source_ids = []
             source_by_id = {row_id: "submitted"}
             reason_by_id = {row_id: "validated"}
             inserted_sequence = self._bnd_inserted_sequence(row)
-            split_mutation_id = self._bnd_split_mutation_id(row, inserted_sequence)
-            mutation_info_override = None
-            if split_mutation_id:
-                mutation_info_override = {
-                    "mutation_id": split_mutation_id,
-                    "mutation_order": "1",
-                    "mutation_molecule": ".",
-                }
+            insertion_source_ids = [row_id] if inserted_sequence else []
+            insertion_split_allowed = True
+            defer_to_canonical_mate = False
 
             if row.info.get("SVTYPE", "") == "BND" and row_id != ".":
-                for mate_id in self._split_info_values(row.info.get("MATEID")):
+                mate_ids = self._split_info_values(row.info.get("MATEID"))
+                if len(mate_ids) > 1 or (mate_ids and mate_ids[0] == row_id):
+                    insertion_split_allowed = False
+                    mate_ids = []
+                for mate_id in mate_ids:
                     if mate_id not in id_map or mate_id in absorbed_ids:
                         continue
 
@@ -641,7 +544,16 @@ class KVarTSVConverter:
                         continue
 
                     reciprocal_mates = self._split_info_values(mate_row.info.get("MATEID"))
-                    if row_id not in reciprocal_mates:
+                    if (
+                        len(reciprocal_mates) > 1
+                        or (
+                            reciprocal_mates
+                            and reciprocal_mates[0] == mate_id
+                        )
+                    ):
+                        insertion_split_allowed = False
+                        continue
+                    if not reciprocal_mates or reciprocal_mates[0] != row_id:
                         continue
                     pair_key = tuple(sorted((row_id, mate_id)))
                     if not self._bnd_mate_coordinates_are_compatible(row, mate_row):
@@ -654,7 +566,43 @@ class KVarTSVConverter:
                             self._record_mate_strand_mismatch(row, mate_row)
                             checked_mate_pairs.add(pair_key)
                         continue
-                    submitted_ids = [row_id, mate_id]
+
+                    if self._bnd_pair_sort_key(mate_row) < self._bnd_pair_sort_key(row):
+                        defer_to_canonical_mate = True
+                        break
+
+                    mate_sequence = self._bnd_inserted_sequence(mate_row)
+                    normalized_mate_sequence = self._mate_inserted_sequence_in_row_orientation(
+                        row,
+                        mate_row,
+                        mate_sequence,
+                    )
+                    if inserted_sequence and normalized_mate_sequence:
+                        if inserted_sequence != normalized_mate_sequence:
+                            self._record_mate_insertion_mismatch(
+                                row,
+                                mate_row,
+                                inserted_sequence,
+                                normalized_mate_sequence,
+                            )
+                            inserted_sequence = ""
+                            insertion_source_ids = []
+                        else:
+                            insertion_source_ids = [row_id, mate_id]
+                    elif inserted_sequence or normalized_mate_sequence:
+                        self._record_one_sided_mate_insertion(
+                            row,
+                            mate_row,
+                            inserted_sequence,
+                            mate_sequence,
+                        )
+                        if normalized_mate_sequence:
+                            inserted_sequence = normalized_mate_sequence
+                            insertion_source_ids = [mate_id]
+                        else:
+                            insertion_source_ids = [row_id]
+
+                    bnd_source_ids = [row_id, mate_id]
                     source_by_id = {
                         row_id: "submitted_primary",
                         mate_id: "collapsed_mate"
@@ -666,11 +614,27 @@ class KVarTSVConverter:
                     absorbed_ids.add(mate_id)
                     break
 
+            if defer_to_canonical_mate:
+                continue
+
+            split_mutation_id = (
+                self._bnd_split_mutation_id(row, inserted_sequence)
+                if insertion_split_allowed
+                else None
+            )
+            mutation_info_override = None
+            if split_mutation_id:
+                mutation_info_override = {
+                    "mutation_id": split_mutation_id,
+                    "mutation_order": "1",
+                    "mutation_molecule": ".",
+                }
+
             call_record = {
                 "row": row,
                 "primary_id": row_id,
                 "output_id": row_id,
-                "submitted_ids": submitted_ids,
+                "bnd_source_ids": bnd_source_ids,
                 "source_by_id": source_by_id,
                 "reason_by_id": reason_by_id,
             }
@@ -678,16 +642,22 @@ class KVarTSVConverter:
                 call_record["mutation_info_override"] = mutation_info_override
             call_records.append(call_record)
 
-            if inserted_sequence:
+            if insertion_split_allowed and inserted_sequence:
                 synthetic_id = self._unique_generated_id(f"{row_id}_ins", generated_ids)
                 synthetic_row = self._synthetic_insertion_row(row, synthetic_id, inserted_sequence)
                 call_records.append({
                     "row": synthetic_row,
                     "primary_id": synthetic_id,
                     "output_id": synthetic_id,
-                    "submitted_ids": [row_id],
-                    "source_by_id": {row_id: "derived_from_submitted"},
-                    "reason_by_id": {row_id: "split_bnd_insertion"},
+                    "bnd_source_ids": insertion_source_ids,
+                    "source_by_id": {
+                        source_id: "derived_from_submitted"
+                        for source_id in insertion_source_ids
+                    },
+                    "reason_by_id": {
+                        source_id: "split_bnd_insertion"
+                        for source_id in insertion_source_ids
+                    },
                     "call_type_override": "insertion",
                     "mutation_info_override": {
                         "mutation_id": split_mutation_id,
@@ -722,10 +692,16 @@ class KVarTSVConverter:
                 self._find_bnd_group(idx, group, processed_variants, id_map)
 
                 if group:
+                    ordered_group = sorted(
+                        group,
+                        key=lambda variant_idx: self._bnd_pair_sort_key(
+                            self.parser.data_rows[variant_idx]
+                        ),
+                    )
                     # DDBJ uses EVENT as the submitter/dbVar-style Mutation ID anchor.
                     # Without EVENT, leave Mutation ID blank; related BND calls remain ungrouped.
                     mutation_id = "."
-                    for variant_idx in group:
+                    for variant_idx in ordered_group:
                         event_ids = self._split_info_values(self.parser.data_rows[variant_idx].info.get("EVENT"))
                         if event_ids:
                             mutation_id = event_ids[0]
@@ -733,7 +709,7 @@ class KVarTSVConverter:
                     if mutation_id == ".":
                         continue
 
-                    for i, variant_idx in enumerate(group):
+                    for i, variant_idx in enumerate(ordered_group):
                         variant_id = self.parser.data_rows[variant_idx].id
                         mutation_id_map[variant_id] = {
                             "mutation_id": mutation_id,
@@ -787,7 +763,7 @@ class KVarTSVConverter:
                 call_records = [
                     {
                         "row": row,
-                        "submitted_ids": [row.id if row.id and row.id != "." else "."]
+                        "bnd_source_ids": [],
                     }
                     for row in self.parser.data_rows
                 ]
@@ -796,7 +772,7 @@ class KVarTSVConverter:
                 tsv_row = self._convert_row_to_tsv(
                     call_record["row"],
                     mutation_id_map,
-                    call_record.get("submitted_ids"),
+                    call_record.get("bnd_source_ids"),
                     call_record.get("output_id", call_record.get("primary_id")),
                     call_record.get("call_type_override"),
                     call_record.get("mutation_info_override"),
@@ -831,7 +807,7 @@ class KVarTSVConverter:
         self,
         row: VCFDataRow,
         mutation_id_map: Dict[str, Dict[str, str]],
-        submitted_call_ids: Optional[List[str]] = None,
+        bnd_source_vcf_ids: Optional[List[str]] = None,
         output_call_id: Optional[str] = None,
         call_type_override: Optional[str] = None,
         mutation_info_override: Optional[Dict[str, str]] = None,
@@ -903,34 +879,6 @@ class KVarTSVConverter:
         # Sequence
         sequence = self._get_sequence_field(svtype, row.ref, row.alt, info)
 
-        hgvsg_row = {
-            "Variant Call Type": call_type,
-            "Chr": chrom,
-            "Outer Start": outer_start,
-            "Start": start_value,
-            "Inner Start": inner_start,
-            "Inner Stop": inner_stop,
-            "Stop": end_value,
-            "Outer Stop": outer_stop,
-            "Insertion Length": insertion_length,
-            "Sequence": sequence,
-        }
-        submitted_hgvsg = next(
-            (
-                _clean_hgvsg_value(info.get(key))
-                for key in ("HGVSG", "HGVSg", "hgvs_name")
-                if _clean_hgvsg_value(info.get(key))
-            ),
-            "",
-        )
-        hgvsg = resolve_hgvsg(
-            submitted_hgvsg,
-            hgvsg_row,
-            self.parser.reference,
-            self.error_handler,
-            variant_id=variant_call_id,
-        )
-
         _validate_sequence_and_reference_fields(
             {
                 "Sequence": sequence,
@@ -992,7 +940,6 @@ class KVarTSVConverter:
             ".",                  # Zygosity
             origin,               # Origin
             phenotype,            # Phenotype
-            hgvsg,                # HGVSG
             external_links,       # External Links
             ".",                  # Evidence
             sequence,             # Sequence
@@ -1005,7 +952,8 @@ class KVarTSVConverter:
             mutation_id,          # Mutation ID
             mutation_order,       # Mutation Order
             mutation_molecule,    # Mutation Molecule
-            ",".join(submitted_call_ids or [variant_call_id])  # Submitted_Variant_Call_IDs
+            ",".join(bnd_source_vcf_ids) if bnd_source_vcf_ids else ".",
+            # BND_Source_VCF_IDs
         ]
 
         return "\t".join(tsv_fields)

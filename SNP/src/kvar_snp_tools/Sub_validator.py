@@ -168,11 +168,15 @@ def _validate_generated_paths(parser: argparse.ArgumentParser, args: argparse.Na
     if _paths_refer_to_same_file(args.output, report_path):
         parser.error("--output and --error-report must use different paths")
 
-    input_paths = (
+    input_paths = [
         ("--vcf", args.vcf),
         ("--metadata", args.metadata),
         ("--reference", args.reference),
-    )
+    ]
+    if args.reference:
+        input_paths.append(
+            ("--reference FASTA index", f"{args.reference}.fai")
+        )
     generated_paths = (
         ("--output", args.output),
         ("--error-report", report_path),
@@ -199,7 +203,10 @@ def main() -> None:
         args.output = _default_output_path(args.command, args.vcf)
     _validate_generated_paths(parser, args)
     _validate_output_suffix(parser, args.output)
-    args.func(args)
+    try:
+        args.func(args)
+    except RuntimeError as exc:
+        parser.exit(1, f"Validation blocked: {exc}\n")
 
 
 if __name__ == "__main__":

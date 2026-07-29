@@ -1,130 +1,156 @@
-# KVar-Toolkit SNP: SNP VCF Validation & dbSNP VCF Creation
+# KVar-Toolkit SNP
 
-## Overview
+Convert and validate SNP VCF files for dbSNP submission.
 
-The **SNP** module of KVar-Toolkit validates SNP VCF input and produces cleaned,
-dbSNP-formatted VCF output for public archive submission. It can convert a
-generic VCF into a dbSNP-formatted VCF, validate and rewrite an existing dbSNP
-VCF, and optionally verify REF alleles against a reference FASTA.
+Run the commands below from the `SNP/` directory.
 
-Run the commands below from this `SNP/` directory.
+## Functions
 
-## Key Features
+| Command | Input | Output |
+| --- | --- | --- |
+| `generic-to-dbsnp` | Generic SNP VCF + metadata | dbSNP-formatted VCF + validation report |
+| `validate-dbsnp` | dbSNP-formatted VCF + metadata | Cleaned dbSNP VCF + validation report |
 
-- **Generic to dbSNP conversion**: Convert a generic VCF into a dbSNP-formatted VCF.
-- **dbSNP validation & cleaning**: Validate an input dbSNP VCF and rewrite it as a cleaned dbSNP VCF.
-- **Reference allele validation**: Optionally validate REF alleles against a reference FASTA before writing output.
-- **Metadata-driven headers**: Translate VCF-style metadata into output VCF headers.
-- **Unified validation reporting**: Write format, metadata, and optional reference findings to one report.
+Both commands support optional REF allele validation with `--reference`.
 
-### Prerequisites
+## Format Reference
 
-- Python 3.10 or higher
-- `pyfaidx` >= 0.8 only for optional reference validation (`pip install -r requirements.txt`)
+[dbSNP VCF Submission Format Guidelines (PDF, 2013)](docs/dbSNP_VCF_Submission.pdf)
+
+## Requirements
+
+- Python 3.10 or later
+- No third-party Python packages
 
 ## Quick Start
 
-Convert a generic VCF into a dbSNP-formatted VCF:
+### Generic VCF to dbSNP VCF
 
 ```bash
 python src/kvar_snp_tools/Sub_validator.py generic-to-dbsnp \
-  -v examples/toy.generic.vcf \
-  -m examples/toy.metadata.txt
+  -v examples/toy.human.snp.generic.vcf \
+  -m examples/toy.human.snp.metadata.txt
 ```
 
-This creates `examples/toy.generic.dbsnp.vcf` and
-`examples/toy.generic.dbsnp.errors.txt`.
+Automatic outputs:
 
-Validate and clean an existing dbSNP VCF:
+- `examples/toy.human.snp.generic.dbsnp.vcf`
+- `examples/toy.human.snp.generic.dbsnp.errors.txt`
+
+### Validate and Clean a dbSNP VCF
 
 ```bash
 python src/kvar_snp_tools/Sub_validator.py validate-dbsnp \
-  -v examples/toy.dbsnp.vcf \
-  -m examples/toy.metadata.txt
+  -v examples/toy.human.snp.dbsnp.vcf \
+  -m examples/toy.human.snp.metadata.txt
 ```
 
-This creates `examples/toy.dbsnp.cleaned.vcf` and
-`examples/toy.dbsnp.cleaned.errors.txt`.
+Automatic outputs:
 
-Reference validation can be added to either command:
+- `examples/toy.human.snp.dbsnp.cleaned.vcf`
+- `examples/toy.human.snp.dbsnp.cleaned.errors.txt`
+
+### Enable Reference Validation
 
 ```bash
 python src/kvar_snp_tools/Sub_validator.py validate-dbsnp \
-  -v examples/toy.dbsnp.vcf \
-  -m examples/toy.metadata.txt \
-  -r examples/toy.reference.fa \
-  -o examples/toy.dbsnp.cleaned.vcf \
-  -e examples/toy.dbsnp.errors.txt
+  -v examples/toy.human.snp.dbsnp.vcf \
+  -m examples/toy.human.snp.metadata.txt \
+  -r examples/toy.human.snp.reference.fasta
 ```
 
-## Common Options
+Use the FASTA used to create the VCF. Without `--reference`, the remaining
+format, metadata, and submission checks still run. The FASTA index (`.fai`) is
+built or refreshed automatically when reference validation is requested. If
+the reference directory is read-only, the generated index is used in memory.
 
-The CLI exposes two commands: `generic-to-dbsnp` and `validate-dbsnp`. Both
-share the following options:
+## Options
 
-| Option | Description |
-| --- | --- |
-| `-v`, `--vcf` | Input VCF path (**required**) |
-| `-o`, `--output` | Optional output dbSNP VCF path; must end with `.vcf` or `.vcf.gz` |
-| `-m`, `--metadata` | Metadata file path (**required**) |
-| `-e`, `--error-report` | Optional integrated validation report path, including reference results when used |
-| `-r`, `--reference` | Optional reference FASTA for REF allele validation |
+| Option | Required | Description |
+| --- | --- | --- |
+| `-v`, `--vcf` | Yes | Input `.vcf` or `.vcf.gz` |
+| `-m`, `--metadata` | Yes | Submission metadata |
+| `-o`, `--output` | No | Output `.vcf` or `.vcf.gz`; derived automatically when omitted |
+| `-e`, `--error-report` | No | Integrated validation report; derived automatically when omitted |
+| `-r`, `--reference` | No | Reference FASTA for REF allele validation |
 
-If `--output` is omitted, `generic-to-dbsnp` changes `sample.vcf.gz` to
-`sample.dbsnp.vcf.gz`, while `validate-dbsnp` changes it to
-`sample.cleaned.vcf.gz`. The same rule applies to uncompressed `.vcf` input.
-Each run writes one validation report. When `--reference` is supplied, REF-check
-statistics and findings are included in that same report. If `--error-report` is
-omitted, the report uses the output VCF basename with `.errors.txt`. Generated
-output and report paths must differ from every input path.
+Generated output and report paths must differ from all input paths.
+Compression is preserved when the automatic output name is derived from a
+`.vcf.gz` input.
 
-## Metadata Format
+## Metadata
 
-Metadata files use VCF-style lines:
+Required format:
 
 ```text
 ##Experiment_id=EXP001
-##reference=toy_ref
 ##SampleSet_id=POP1
 ```
 
-`SampleSet_id` in the metadata file is written to output VCF headers as
-`##population_id=...`. The cleaned VCF output does not emit `##SampleSet_id=...`.
-`Experiment_id` is written as `##batch=...`. A non-empty `Experiment_id` and
-exactly one non-empty `SampleSet_id` are required.
+Optional VCF reference header value:
 
-One SNP VCF represents one SampleSet. During `generic-to-dbsnp`, all individual
-sample columns are aggregated into that single SampleSet. During
-`validate-dbsnp`, the input must contain exactly one `##population_id` and
-exactly one population column after `FORMAT`; both must match the metadata
-`SampleSet_id`.
-
-## Project Structure
-
-```
-SNP/
-├── README.md            # This file
-├── requirements.txt
-├── src/kvar_snp_tools/
-│   ├── Sub_validator.py               # Public CLI entry point
-│   ├── VCF2dbSNP.py                   # Generic VCF -> dbSNP VCF conversion
-│   ├── dbsnp_vcf_cleaner.py           # dbSNP VCF validation & cleaning
-│   ├── dbSNP_parser.py                # Streaming dbSNP VCF parser
-│   ├── VCF_ref_check.py               # Optional REF check against a reference FASTA
-│   ├── metadata_validator.py          # Metadata -> VCF header translation
-│   └── error_handler.py               # Error codes and validation report
-├── examples/            # Toy inputs for trying the commands
-└── tests/               # CLI smoke tests
+```text
+##reference=toy_ref
 ```
 
-## Testing
+Rules:
+
+- a non-empty `Experiment_id` is required;
+- exactly one non-empty `SampleSet_id` is required;
+- `Experiment_id` becomes the output `##batch`;
+- `SampleSet_id` becomes the output `##population_id`;
+- individual sample IDs are not stored in metadata; and
+- metadata `reference`, when present, is checked against and written to the VCF
+  `##reference` header.
+
+## SampleSet and Frequency Handling
+
+One VCF represents one SampleSet.
+
+For `generic-to-dbsnp`, input INFO or sample genotype values are used to write
+SampleSet-level `NA:FRQ` values.
+
+When sample columns are used, all individual samples are aggregated into one
+population column named with the metadata `SampleSet_id`. Sample column names
+are not compared with metadata.
+
+For `validate-dbsnp`, all three values must agree:
+
+- the single metadata `SampleSet_id`;
+- the single VCF `##population_id`; and
+- the single population column after `FORMAT`.
+
+A mismatch is a blocking error.
+
+## Record Validation
+
+- Local ID: non-empty, unique, and at most 64 characters
+- ALT: exactly one allele
+- REF/ALT bases: `A`, `T`, `G`, or `C`
+- Indel: REF and ALT must share the leading base
+- Allele length: the longer allele must not exceed 50 bp
+
+Only these dbSNP submission INFO tags are retained:
+
+`VRT`, `AF`, `AN`, `AC`, `AD`, `AA`, `CMT`, `LKO`, `NIO`, `OMIM`, `OMIA`,
+`PMID`, `SAO`, `SSR`
+
+Unsupported INFO tags are reported and removed from the generated VCF.
+
+## Validation Result
+
+- `Error` or `Critical`: blocks output publication
+- `Warning` or `Info`: recorded without blocking a valid output
+- One integrated report contains format, metadata, and optional reference
+  findings
+- Output is published only after the full conversion or validation succeeds
+
+## Tests
 
 ```bash
 python tests/test_public_cli_smoke.py
 python tests/test_public_dbsnp_cleaner_streaming.py
 ```
 
-## Notes
-
-- `pyfaidx` is required only for reference FASTA validation.
-- This public subset does not include private datasets, generated full-scale outputs, or internal pipeline reports.
+The bundled human-style examples are synthetic and contain no real person or
+cohort data.

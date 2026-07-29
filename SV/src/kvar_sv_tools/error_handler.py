@@ -106,6 +106,10 @@ class ErrorCode(Enum):
     MATEID_ALT_MISMATCH = (3111, ErrorSeverity.WARNING, ErrorCategory.VALIDATION_ERROR, "Reciprocal MATEID breakend ALT coordinates are inconsistent")
     BND_INSERTION_SPLIT = (3112, ErrorSeverity.WARNING, ErrorCategory.VALIDATION_ERROR, "Breakend insertion sequence was split into a separate insertion call", ErrorAction.SPLIT_AND_CONTINUE)
     MATEID_STRAND_MISMATCH = (3113, ErrorSeverity.WARNING, ErrorCategory.VALIDATION_ERROR, "Reciprocal MATEID breakend ALT strand orientations are inconsistent")
+    MATEID_INSERTION_SEQUENCE_ONE_SIDED = (3114, ErrorSeverity.WARNING, ErrorCategory.VALIDATION_ERROR, "Inserted sequence is present in only one reciprocal MATEID breakend ALT", ErrorAction.INFER_AND_CONTINUE)
+    MATEID_INSERTION_SEQUENCE_MISMATCH = (3115, ErrorSeverity.ERROR, ErrorCategory.VALIDATION_ERROR, "Reciprocal MATEID breakend inserted sequences are inconsistent after orientation normalization", ErrorAction.BLOCK)
+    MULTIPLE_MATEIDS_UNSUPPORTED = (3116, ErrorSeverity.ERROR, ErrorCategory.VALIDATION_ERROR, "Multiple MATEID values are not supported for a single BND ALT")
+    MATEID_SELF_REFERENCE = (3117, ErrorSeverity.ERROR, ErrorCategory.VALIDATION_ERROR, "MATEID must not reference the same BND record")
 
     # Conversion (4000s)
     CONVERSION_FAILED = (4001, ErrorSeverity.ERROR, ErrorCategory.CONVERSION_ERROR, "TSV conversion failed")
@@ -132,7 +136,6 @@ class ErrorCode(Enum):
     INVALID_PHENOTYPE_LINK = (7107, ErrorSeverity.WARNING, ErrorCategory.VALIDATION_ERROR, "Phenotype should reference a valid phenotype db:id")
     INVALID_EVIDENCE_LINK = (7108, ErrorSeverity.WARNING, ErrorCategory.VALIDATION_ERROR, "Evidence should reference a valid db:id")
     INVALID_EXTERNAL_LINK = (7109, ErrorSeverity.WARNING, ErrorCategory.VALIDATION_ERROR, "External Links should reference a valid db:id or URL")
-    INVALID_HGVSG = (7124, ErrorSeverity.WARNING, ErrorCategory.VALIDATION_ERROR, "HGVSG is invalid or inconsistent with the call placement", ErrorAction.REPAIR_AND_CONTINUE)
 
     def __init__(
         self,
